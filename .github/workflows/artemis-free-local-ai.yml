@@ -1,0 +1,126 @@
+name: Artemis Free Local AI Android
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout Artemis
+        uses: actions/checkout@v4
+
+      - name: Run Android emulator + local Qwen3-VL + Artemis
+        uses: reactivecircus/android-emulator-runner@v2.38.0
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          emulator-options: "-no-window -no-snapshot -noaudio -no-boot-anim -camera-back none"
+          disable-linux-hw-accel: false
+          emulator-boot-timeout: 600
+          script: |
+            set -euxo pipefail
+
+            echo "=== ADB / DEVICE ==="
+            adb devices -l
+            adb shell getprop ro.build.version.release
+            adb shell getprop ro.build.version.sdk
+            adb shell wm size
+            adb shell dumpsys battery | sed -n '1,25p'
+
+            echo "=== UV ==="
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            export PATH="$HOME/.local/bin:$PATH"
+            uv sync --frozen
+
+            echo "=== OLLAMA ==="
+            curl -fsSL https://ollama.com/install.sh | sh
+            export OLLAMA_HOST=127.0.0.1:11434
+            export OLLAMA_NUM_PARALLEL=1
+            export OLLAMA_MAX_LOADED_MODELS=1
+            nohup ollama serve > /tmp/ollama.log 2>&1 &
+            for i in $(seq 1 60); do
+              if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+                break
+              fi
+              sleep 2
+            done
+            curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
+            ollama pull qwen3-vl:2b-instruct
+
+            echo "=== OPENAI-COMPATIBLE TOOL-CALL SMOKE ==="
+            curl -fsS http://127.0.0.1:11434/v1/chat/completions \
+              -H "Content-Type: application/json" \
+              -d '{
+                "model":"qwen3-vl:2b-instruct",
+                "messages":[{"role":"user","content":"Reply with OK only."}],
+                "tools":[{
+                  "type":"function",
+                  "function":{
+                    "name":"report",
+                    "description":"Report a result",
+                    "parameters":{
+                      "type":"object",
+                      "properties":{"value":{"type":"string"}},
+                      "required":["value"]
+                    }
+                  }
+                }],
+                "tool_choice":"none",
+                "max_tokens":16
+              }' > /tmp/qwen-smoke.json
+            cat /tmp/qwen-smoke.json
+
+            echo "=== PATCH ARTEMIS LLM CONFIG TO LOCAL OLLAMA ==="
+            uv run python - <<'PY'
+            from pathlib import Path
+            import json
+            from artemis.utils.file import load_jsonc
+
+            model = "qwen3-vl:2b-instruct"
+            src = Path("config/artemis.jsonc")
+            with src.open(encoding="utf-8") as f:
+                data = load_jsonc(f)
+
+            def patch(node):
+                if isinstance(node, dict):
+                    provider = node.get("provider")
+                    if provider is not None:
+                        node["provider"] = "ollama"
+                    if "model" in node and isinstance(node["model"], str):
+                        node["model"] = model
+                    for value in node.values():
+                        patch(value)
+                elif isinstance(node, list):
+                    for value in node:
+                        patch(value)
+
+            patch(data)
+            data["default"]["provider"] = "ollama"
+            data["default"]["model"] = model
+            src.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            print("patched config/artemis.jsonc")
+            PY
+
+            export OPENAI_API_KEY=ollama
+            export OPENAI_BASE_URL=http://127.0.0.1:11434/v1
+
+            echo "=== ARTEMIS REAL LOCAL AI RUN ==="
+            uv run artemis run \
+              "Open Settings and report the battery percentage" \
+              --profile flash \
+              --without-video-recording-tools \
+              --disable-step-summarizer \
+              --disable-outputter \
+              --disable-checker \
+              --disable-planner-validation \
+              --standalone
+
+            echo "=== OLLAMA LOG ==="
+            cat /tmp/ollama.log
