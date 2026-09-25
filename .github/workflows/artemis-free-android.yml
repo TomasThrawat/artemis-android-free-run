@@ -1,0 +1,53 @@
+name: Artemis Free Android Smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout Artemis
+        uses: actions/checkout@v4
+
+      - name: Run Android emulator + Artemis
+        uses: reactivecircus/android-emulator-runner@v2.38.0
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          emulator-options: "-no-window -no-snapshot -noaudio -no-boot-anim -camera-back none"
+          disable-linux-hw-accel: false
+          emulator-boot-timeout: 600
+          script: |
+            set -euxo pipefail
+            echo "=== ADB DEVICES ==="
+            adb devices -l
+            echo "=== ANDROID VERSION ==="
+            adb shell getprop ro.build.version.release
+            echo "=== SDK ==="
+            adb shell getprop ro.build.version.sdk
+            echo "=== DISPLAY ==="
+            adb shell wm size
+            echo "=== BATTERY ==="
+            adb shell dumpsys battery | sed -n '1,25p'
+
+            echo "=== INSTALL UV ==="
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            export PATH="$HOME/.local/bin:$PATH"
+
+            echo "=== INSTALL ARTEMIS ==="
+            uv sync --frozen
+
+            echo "=== ARTEMIS SMOKE ==="
+            GOOGLE_API_KEY=stub ARTEMIS_FAKE_LLM=1 \
+              uv run artemis run \
+              "Open Settings and report the battery percentage" \
+              --profile flash \
+              --without-video-recording-tools \
+              --standalone
