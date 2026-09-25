@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   android-agent:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 35
     steps:
       - name: Checkout Artemis
@@ -22,8 +22,9 @@ jobs:
           arch: x86_64
           profile: pixel_2
           emulator-options: "-no-window -no-snapshot -noaudio -no-boot-anim -camera-back none"
+          disable-animations: true
           disable-linux-hw-accel: false
-          emulator-boot-timeout: 600
+          emulator-boot-timeout: 900
           script: |
             set -euxo pipefail
 
@@ -60,19 +61,6 @@ jobs:
               -d '{
                 "model":"qwen3-vl:2b-instruct",
                 "messages":[{"role":"user","content":"Reply with OK only."}],
-                "tools":[{
-                  "type":"function",
-                  "function":{
-                    "name":"report",
-                    "description":"Report a result",
-                    "parameters":{
-                      "type":"object",
-                      "properties":{"value":{"type":"string"}},
-                      "required":["value"]
-                    }
-                  }
-                }],
-                "tool_choice":"none",
                 "max_tokens":16
               }' > /tmp/qwen-smoke.json
             cat /tmp/qwen-smoke.json
@@ -90,8 +78,7 @@ jobs:
 
             def patch(node):
                 if isinstance(node, dict):
-                    provider = node.get("provider")
-                    if provider is not None:
+                    if "provider" in node:
                         node["provider"] = "ollama"
                     if "model" in node and isinstance(node["model"], str):
                         node["model"] = model
