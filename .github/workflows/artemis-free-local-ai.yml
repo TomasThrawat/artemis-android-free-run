@@ -14,100 +14,182 @@ jobs:
       - name: Checkout Artemis
         uses: actions/checkout@v4
 
-      - name: Run Android emulator + local Qwen3-VL + Artemis
-        uses: reactivecircus/android-emulator-runner@v2.38.0
-        with:
-          api-level: 34
-          target: google_apis
-          arch: x86_64
-          profile: pixel_2
-          emulator-options: "-no-window -no-snapshot -noaudio -no-boot-anim -camera-back none"
-          disable-animations: true
-          disable-linux-hw-accel: false
-          emulator-boot-timeout: 900
-          script: |
-            set -euxo pipefail
+      - name: Enable KVM
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -e /dev/kvm
+          sudo chmod 666 /dev/kvm
+          emulator -accel-check || true
 
-            echo "=== ADB / DEVICE ==="
-            adb devices -l
-            adb shell getprop ro.build.version.release
-            adb shell getprop ro.build.version.sdk
-            adb shell wm size
-            adb shell dumpsys battery | sed -n '1,25p'
+      - name: Boot Android Emulator directly
+        shell: bash
+        run: |
+          set -euxo pipefail
 
-            echo "=== UV ==="
-            curl -LsSf https://astral.sh/uv/install.sh | sh
-            export PATH="$HOME/.local/bin:$PATH"
-            uv sync --frozen
+          export ANDROID_SDK_ROOT="${ANDROID_HOME}"
+          export PATH="${ANDROID_HOME}/emulator:${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/cmdline-tools/latest/bin:$PATH"
 
-            echo "=== OLLAMA ==="
-            curl -fsSL https://ollama.com/install.sh | sh
-            export OLLAMA_HOST=127.0.0.1:11434
-            export OLLAMA_NUM_PARALLEL=1
-            export OLLAMA_MAX_LOADED_MODELS=1
-            nohup ollama serve > /tmp/ollama.log 2>&1 &
-            for i in $(seq 1 60); do
-              if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
-                break
-              fi
-              sleep 2
-            done
-            curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
-            ollama pull qwen3-vl:2b-instruct
+          echo "=== ANDROID TOOLCHAIN ==="
+          emulator -version
+          adb version
+          sdkmanager --version
 
-            echo "=== OPENAI-COMPATIBLE TOOL-CALL SMOKE ==="
-            curl -fsS http://127.0.0.1:11434/v1/chat/completions \
-              -H "Content-Type: application/json" \
-              -d '{
-                "model":"qwen3-vl:2b-instruct",
-                "messages":[{"role":"user","content":"Reply with OK only."}],
-                "max_tokens":16
-              }' > /tmp/qwen-smoke.json
-            cat /tmp/qwen-smoke.json
+          echo "=== ENSURE API 34 IMAGE ==="
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "emulator" "platform-tools" "platforms;android-34" "system-images;android-34;google_apis;x86_64"
 
-            echo "=== PATCH ARTEMIS LLM CONFIG TO LOCAL OLLAMA ==="
-            uv run python - <<'PY'
-            from pathlib import Path
-            import json
-            from artemis.utils.file import load_jsonc
+          echo "=== CREATE AVD ==="
+          rm -rf "$HOME/.android/avd/artemis.avd" "$HOME/.android/avd/artemis.ini"
+          echo "no" | avdmanager create avd \
+            -n artemis \
+            -k "system-images;android-34;google_apis;x86_64" \
+            --device "pixel_2"
+          cat "$HOME/.android/avd/artemis.avd/config.ini"
 
-            model = "qwen3-vl:2b-instruct"
-            src = Path("config/artemis.jsonc")
-            with src.open(encoding="utf-8") as f:
-                data = load_jsonc(f)
+          echo "=== START EMULATOR ==="
+          nohup emulator @artemis \
+            -no-window \
+            -no-audio \
+            -no-boot-anim \
+            -no-snapshot \
+            -wipe-data \
+            -gpu swiftshader_indirect \
+            -accel on \
+            -camera-back none \
+            > /tmp/emulator.log 2>&1 &
+          echo $! > /tmp/emulator.pid
 
-            def patch(node):
-                if isinstance(node, dict):
-                    if "provider" in node:
-                        node["provider"] = "ollama"
-                    if "model" in node and isinstance(node["model"], str):
-                        node["model"] = model
-                    for value in node.values():
-                        patch(value)
-                elif isinstance(node, list):
-                    for value in node:
-                        patch(value)
+          echo "=== WAIT FOR ADB ==="
+          adb start-server
+          adb wait-for-device
 
-            patch(data)
-            data["default"]["provider"] = "ollama"
-            data["default"]["model"] = model
-            src.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            print("patched config/artemis.jsonc")
-            PY
+          echo "=== WAIT FOR BOOT ==="
+          for i in $(seq 1 180); do
+            booted="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+            if [ "$booted" = "1" ]; then
+              break
+            fi
+            sleep 2
+          done
 
-            export OPENAI_API_KEY=ollama
-            export OPENAI_BASE_URL=http://127.0.0.1:11434/v1
+          booted="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+          test "$booted" = "1"
 
-            echo "=== ARTEMIS REAL LOCAL AI RUN ==="
-            uv run artemis run \
-              "Open Settings and report the battery percentage" \
-              --profile flash \
-              --without-video-recording-tools \
-              --disable-step-summarizer \
-              --disable-outputter \
-              --disable-checker \
-              --disable-planner-validation \
-              --standalone
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
 
-            echo "=== OLLAMA LOG ==="
-            cat /tmp/ollama.log
+          echo "=== DEVICE ==="
+          adb devices -l
+          adb shell getprop ro.build.version.release
+          adb shell getprop ro.build.version.sdk
+          adb shell wm size
+          adb shell dumpsys battery | sed -n '1,25p'
+
+          echo "=== EMULATOR LOG ==="
+          tail -120 /tmp/emulator.log
+
+      - name: Install Artemis dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          uv sync --frozen
+
+      - name: Start local Qwen3-VL
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -fsSL https://ollama.com/install.sh | sh
+          export OLLAMA_HOST=127.0.0.1:11434
+          export OLLAMA_NUM_PARALLEL=1
+          export OLLAMA_MAX_LOADED_MODELS=1
+          nohup ollama serve > /tmp/ollama.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
+          ollama pull qwen3-vl:2b-instruct
+          curl -fsS http://127.0.0.1:11434/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -d '{"model":"qwen3-vl:2b-instruct","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}' \
+            | tee /tmp/qwen-smoke.json
+
+      - name: Configure Artemis for local Qwen3-VL
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          uv run python - <<'PY'
+          from pathlib import Path
+          import json
+          from artemis.utils.file import load_jsonc
+
+          model = "qwen3-vl:2b-instruct"
+          src = Path("config/artemis.jsonc")
+          with src.open(encoding="utf-8") as f:
+              data = load_jsonc(f)
+
+          def patch(node):
+              if isinstance(node, dict):
+                  if "provider" in node:
+                      node["provider"] = "ollama"
+                  if "model" in node and isinstance(node["model"], str):
+                      node["model"] = model
+                  for value in node.values():
+                      patch(value)
+              elif isinstance(node, list):
+                  for value in node:
+                      patch(value)
+
+          patch(data)
+          if isinstance(data.get("default"), dict):
+              data["default"]["provider"] = "ollama"
+              data["default"]["model"] = model
+          src.write_text(json.dumps(data, indent=2), encoding="utf-8")
+          print("patched config/artemis.jsonc")
+          PY
+
+      - name: Run Artemis on emulator
+        shell: bash
+        env:
+          OPENAI_API_KEY: ollama
+          OPENAI_BASE_URL: http://127.0.0.1:11434/v1
+          OLLAMA_HOST: 127.0.0.1:11434
+        run: |
+          set -euxo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+
+          echo "=== PRE-ARTEMIS ADB CHECK ==="
+          adb devices -l
+          adb shell am start -a android.settings.SETTINGS
+          sleep 2
+
+          echo "=== ARTEMIS REAL LOCAL AI RUN ==="
+          uv run artemis run \
+            "Open Settings and report the battery percentage" \
+            --profile flash \
+            --without-video-recording-tools \
+            --disable-step-summarizer \
+            --disable-outputter \
+            --disable-checker \
+            --disable-planner-validation \
+            --standalone
+
+      - name: Collect diagnostics
+        if: always()
+        shell: bash
+        run: |
+          adb devices -l || true
+          adb shell dumpsys battery || true
+          adb shell getprop ro.build.version.release || true
+          adb shell getprop ro.build.version.sdk || true
+          echo "=== EMULATOR LOG ==="
+          tail -200 /tmp/emulator.log || true
+          echo "=== OLLAMA LOG ==="
+          tail -200 /tmp/ollama.log || true
