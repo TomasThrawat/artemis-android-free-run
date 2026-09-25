@@ -9,7 +9,7 @@ permissions:
 jobs:
   android-agent:
     runs-on: ubuntu-22.04
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - name: Checkout Artemis
         uses: actions/checkout@v4
@@ -20,7 +20,7 @@ jobs:
           set -euxo pipefail
           test -e /dev/kvm
           sudo chmod 666 /dev/kvm
-          emulator -accel-check || true
+          ls -l /dev/kvm
 
       - name: Boot Android Emulator directly
         shell: bash
@@ -30,21 +30,24 @@ jobs:
           export ANDROID_SDK_ROOT="${ANDROID_HOME}"
           export PATH="${ANDROID_HOME}/emulator:${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/cmdline-tools/latest/bin:$PATH"
 
-          echo "=== ANDROID TOOLCHAIN ==="
-          emulator -version
-          adb version
+          echo "=== ANDROID SDK ==="
           sdkmanager --version
 
-          echo "=== ENSURE API 34 IMAGE ==="
+          echo "=== INSTALL REQUIRED PACKAGES ==="
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager "emulator" "platform-tools" "platforms;android-34" "system-images;android-34;google_apis;x86_64"
 
+          echo "=== ANDROID TOOLCHAIN ==="
+          emulator -version
+          adb version
+          emulator -accel-check
+
           echo "=== CREATE AVD ==="
+          mkdir -p "$HOME/.android/avd"
           rm -rf "$HOME/.android/avd/artemis.avd" "$HOME/.android/avd/artemis.ini"
           echo "no" | avdmanager create avd \
             -n artemis \
-            -k "system-images;android-34;google_apis;x86_64" \
-            --device "pixel_2"
+            -k "system-images;android-34;google_apis;x86_64"
           cat "$HOME/.android/avd/artemis.avd/config.ini"
 
           echo "=== START EMULATOR ==="
@@ -56,13 +59,12 @@ jobs:
             -wipe-data \
             -gpu swiftshader_indirect \
             -accel on \
-            -camera-back none \
             > /tmp/emulator.log 2>&1 &
           echo $! > /tmp/emulator.pid
 
           echo "=== WAIT FOR ADB ==="
           adb start-server
-          adb wait-for-device
+          timeout 240 adb wait-for-device
 
           echo "=== WAIT FOR BOOT ==="
           for i in $(seq 1 180); do
@@ -86,9 +88,6 @@ jobs:
           adb shell getprop ro.build.version.sdk
           adb shell wm size
           adb shell dumpsys battery | sed -n '1,25p'
-
-          echo "=== EMULATOR LOG ==="
-          tail -120 /tmp/emulator.log
 
       - name: Install Artemis dependencies
         shell: bash
@@ -185,6 +184,9 @@ jobs:
         if: always()
         shell: bash
         run: |
+          export ANDROID_SDK_ROOT="${ANDROID_HOME}"
+          export PATH="${ANDROID_HOME}/emulator:${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/cmdline-tools/latest/bin:$HOME/.local/bin:$PATH"
+          echo "=== ADB ==="
           adb devices -l || true
           adb shell dumpsys battery || true
           adb shell getprop ro.build.version.release || true
