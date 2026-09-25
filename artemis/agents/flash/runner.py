@@ -282,9 +282,23 @@ class FlashRunner:
         try:
             return get_llm(self.ctx, name="operator")
         except Exception as e:
-            logger.warning(f"Failed to get operator LLM from config, using default: {e}")
+            # Never fall back to a paid Google model in local/offline runs.
+            # Keep the original exception in the log, then use the same local
+            # OpenAI-compatible endpoint used by the configured Ollama provider.
+            logger.exception("Failed to get operator LLM from config; using local Ollama fallback")
+            from langchain_openai import ChatOpenAI
 
-            return RobustChatModelWrapper(get_google_llm(model_name="gemini-2.5-flash"), self.ctx)
+            model = os.environ.get("ARTEMIS_LOCAL_MODEL", "qwen3-vl:2b-instruct")
+            base_url = os.environ.get("OPENAI_BASE_URL", "http://127.0.0.1:11434/v1")
+            api_key = os.environ.get("OPENAI_API_KEY", "ollama")
+            local_model = ChatOpenAI(
+                model=model,
+                temperature=0.0,
+                api_key=api_key,
+                base_url=base_url,
+                timeout=60.0,
+            )
+            return RobustChatModelWrapper(local_model, self.ctx)
 
     def _render_system_prompt(self, tools_declaration: list) -> str:
         """Renders the system prompt from the flash_runner.md template.
