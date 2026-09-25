@@ -10,6 +10,13 @@ jobs:
   android-agent:
     runs-on: ubuntu-22.04
     timeout-minutes: 45
+    env:
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      OLLAMA_HOST: 127.0.0.1:11434
+      OPENAI_API_KEY: ollama
+      OPENAI_BASE_URL: http://127.0.0.1:11434/v1
+
     steps:
       - name: Checkout Artemis
         uses: actions/checkout@v4
@@ -22,6 +29,10 @@ jobs:
           sudo chmod 666 /dev/kvm
           sudo apt-get update
           sudo apt-get install -y libpulse0
+          echo "${ANDROID_HOME}/emulator" >> "${GITHUB_PATH}"
+          echo "${ANDROID_HOME}/platform-tools" >> "${GITHUB_PATH}"
+          echo "${ANDROID_HOME}/cmdline-tools/latest/bin" >> "${GITHUB_PATH}"
+          echo "$HOME/.local/bin" >> "${GITHUB_PATH}"
           ls -l /dev/kvm
           ldconfig -p | grep -F 'libpulse.so.0' || true
 
@@ -29,9 +40,6 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-
-          export ANDROID_SDK_ROOT="${ANDROID_HOME}"
-          export PATH="${ANDROID_HOME}/emulator:${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/cmdline-tools/latest/bin:$PATH"
 
           echo "=== ANDROID SDK ==="
           sdkmanager --version
@@ -48,28 +56,16 @@ jobs:
           echo "=== CREATE AVD ==="
           mkdir -p "$HOME/.android/avd"
           rm -rf "$HOME/.android/avd/artemis.avd" "$HOME/.android/avd/artemis.ini"
-          echo "no" | avdmanager create avd \
-            -n artemis \
-            -k "system-images;android-34;google_apis;x86_64"
+          echo "no" | avdmanager create avd             -n artemis             -k "system-images;android-34;google_apis;x86_64"
           cat "$HOME/.android/avd/artemis.avd/config.ini"
 
           echo "=== START EMULATOR ==="
-          nohup emulator @artemis \
-            -no-window \
-            -no-audio \
-            -no-boot-anim \
-            -no-snapshot \
-            -wipe-data \
-            -gpu swiftshader_indirect \
-            -accel on \
-            > /tmp/emulator.log 2>&1 &
+          nohup emulator @artemis             -no-window             -no-audio             -no-boot-anim             -no-snapshot             -wipe-data             -gpu swiftshader_indirect             -accel on             > /tmp/emulator.log 2>&1 &
           echo $! > /tmp/emulator.pid
 
-          echo "=== WAIT FOR ADB ==="
           adb start-server
           timeout 240 adb wait-for-device
 
-          echo "=== WAIT FOR BOOT ==="
           for i in $(seq 1 180); do
             booted="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
             if [ "$booted" = "1" ]; then
@@ -78,8 +74,7 @@ jobs:
             sleep 2
           done
 
-          booted="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
-          test "$booted" = "1"
+          test "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1"
 
           adb shell settings put global window_animation_scale 0
           adb shell settings put global transition_animation_scale 0
@@ -96,19 +91,23 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          export PATH="$HOME/.local/bin:$PATH"
+          if ! command -v uv >/dev/null 2>&1; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+          fi
+          uv --version
           uv sync --frozen
 
       - name: Start local Qwen3-VL
         shell: bash
         run: |
           set -euxo pipefail
-          curl -fsSL https://ollama.com/install.sh | sh
-          export OLLAMA_HOST=127.0.0.1:11434
-          export OLLAMA_NUM_PARALLEL=1
-          export OLLAMA_MAX_LOADED_MODELS=1
-          nohup ollama serve > /tmp/ollama.log 2>&1 &
+
+          echo "=== OLLAMA INSTALL ==="
+          if ! command -v ollama >/dev/null 2>&1; then
+            curl -fsSL https://ollama.com/install.sh | sh
+          fi
+
+          echo "=== WAIT FOR OLLAMA SERVICE ==="
           for i in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
               break
@@ -116,17 +115,17 @@ jobs:
             sleep 2
           done
           curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
+
+          echo "=== PULL QWEN3-VL ==="
           ollama pull qwen3-vl:2b-instruct
-          curl -fsS http://127.0.0.1:11434/v1/chat/completions \
-            -H "Content-Type: application/json" \
-            -d '{"model":"qwen3-vl:2b-instruct","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}' \
-            | tee /tmp/qwen-smoke.json
+
+          echo "=== LOCAL MODEL SMOKE ==="
+          curl -fsS http://127.0.0.1:11434/v1/chat/completions             -H "Content-Type: application/json"             -d '{"model":"qwen3-vl:2b-instruct","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}'             | tee /tmp/qwen-smoke.json
 
       - name: Configure Artemis for local Qwen3-VL
         shell: bash
         run: |
           set -euxo pipefail
-          export PATH="$HOME/.local/bin:$PATH"
           uv run python - <<'PY'
           from pathlib import Path
           import json
@@ -153,19 +152,15 @@ jobs:
           if isinstance(data.get("default"), dict):
               data["default"]["provider"] = "ollama"
               data["default"]["model"] = model
+
           src.write_text(json.dumps(data, indent=2), encoding="utf-8")
           print("patched config/artemis.jsonc")
           PY
 
       - name: Run Artemis on emulator
         shell: bash
-        env:
-          OPENAI_API_KEY: ollama
-          OPENAI_BASE_URL: http://127.0.0.1:11434/v1
-          OLLAMA_HOST: 127.0.0.1:11434
         run: |
           set -euxo pipefail
-          export PATH="$HOME/.local/bin:$PATH"
 
           echo "=== PRE-ARTEMIS ADB CHECK ==="
           adb devices -l
@@ -173,22 +168,12 @@ jobs:
           sleep 2
 
           echo "=== ARTEMIS REAL LOCAL AI RUN ==="
-          uv run artemis run \
-            "Open Settings and report the battery percentage" \
-            --profile flash \
-            --without-video-recording-tools \
-            --disable-step-summarizer \
-            --disable-outputter \
-            --disable-checker \
-            --disable-planner-validation \
-            --standalone
+          uv run artemis run             "Open Settings and report the battery percentage"             --profile flash             --without-video-recording-tools             --disable-step-summarizer             --disable-outputter             --disable-checker             --disable-planner-validation             --standalone
 
       - name: Collect diagnostics
         if: always()
         shell: bash
         run: |
-          export ANDROID_SDK_ROOT="${ANDROID_HOME}"
-          export PATH="${ANDROID_HOME}/emulator:${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/cmdline-tools/latest/bin:$HOME/.local/bin:$PATH"
           echo "=== ADB ==="
           adb devices -l || true
           adb shell dumpsys battery || true
@@ -197,4 +182,4 @@ jobs:
           echo "=== EMULATOR LOG ==="
           tail -200 /tmp/emulator.log || true
           echo "=== OLLAMA LOG ==="
-          tail -200 /tmp/ollama.log || true
+          journalctl -u ollama --no-pager -n 200 || true
