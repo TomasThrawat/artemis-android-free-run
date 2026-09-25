@@ -14,13 +14,16 @@ jobs:
       - name: Checkout Artemis
         uses: actions/checkout@v4
 
-      - name: Enable KVM
+      - name: Enable KVM and emulator runtime libraries
         shell: bash
         run: |
           set -euxo pipefail
           test -e /dev/kvm
           sudo chmod 666 /dev/kvm
+          sudo apt-get update
+          sudo apt-get install -y libpulse0
           ls -l /dev/kvm
+          ldconfig -p | grep -F 'libpulse.so.0' || true
 
       - name: Boot Android Emulator directly
         shell: bash
