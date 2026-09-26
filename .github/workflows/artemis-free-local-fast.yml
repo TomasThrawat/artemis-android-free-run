@@ -47,7 +47,6 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-
           test -e /dev/kvm
           sudo chmod 666 /dev/kvm
 
@@ -95,7 +94,7 @@ jobs:
           rm -rf "$ANDROID_AVD_HOME/artemis.avd"
           mkdir -p "$ANDROID_AVD_HOME"
 
-          echo no | timeout 60 "$AVDMANAGER" --sdk_root="$ANDROID_SDK_ROOT" create avd             --force             --name artemis             --package "system-images;android-34;google_apis;x86_64"             --abi x86_64             --path "$ANDROID_AVD_HOME/artemis.avd"
+          echo no | timeout 60 "$AVDMANAGER" create avd             --sdk_root="$ANDROID_SDK_ROOT"             --force             --name artemis             --package "system-images;android-34;google_apis;x86_64"             --abi x86_64             --path "$ANDROID_AVD_HOME/artemis.avd"
 
           test -f "$ANDROID_AVD_HOME/artemis.avd/config.ini"
 
