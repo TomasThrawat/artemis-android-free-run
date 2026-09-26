@@ -14,8 +14,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     env:
-      ANDROID_SDK_ROOT: /home/runner/work/_temp/android-sdk
-      ANDROID_HOME: /home/runner/work/_temp/android-sdk
+      ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_AVD_HOME: /home/runner/work/_temp/android-avd
       OLLAMA_HOST: 127.0.0.1:11434
       OLLAMA_MODELS: /home/runner/.ollama/models
@@ -23,9 +22,6 @@ jobs:
       OPENAI_BASE_URL: http://127.0.0.1:11434/v1
       ARTEMIS_LOCAL_ONLY: "1"
       ARTEMIS_LOCAL_MODEL: qwen3-vl:2b-instruct
-      GIT_CONFIG_COUNT: "1"
-      GIT_CONFIG_KEY_0: init.defaultBranch
-      GIT_CONFIG_VALUE_0: main
 
     steps:
       - name: Checkout Artemis
@@ -36,23 +32,22 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: |
-            /home/runner/work/_temp/android-sdk/packages.xml
-            /home/runner/work/_temp/android-sdk/emulator
-            /home/runner/work/_temp/android-sdk/platform-tools
-            /home/runner/work/_temp/android-sdk/platforms/android-34
-            /home/runner/work/_temp/android-sdk/system-images/android-34/google_apis
+            /home/runner/work/_temp/android-cache/emulator
+            /home/runner/work/_temp/android-cache/platform-tools
+            /home/runner/work/_temp/android-cache/system-images/android-34/google_apis/x86_64
             /home/runner/.cache/uv
             /home/runner/.ollama/models
-          key: artemis-usersdk-qwen3vl-v6
+          key: artemis-android-qwen3vl-v7
           restore-keys: |
-            artemis-usersdk-qwen3vl-v5
-            artemis-usersdk-qwen3vl-v4
-            artemis-usersdk-qwen3vl-
+            artemis-android-qwen3vl-v6
+            artemis-android-qwen3vl-v5
+            artemis-android-qwen3vl-
 
       - name: Prepare host
         shell: bash
         run: |
           set -euxo pipefail
+
           test -e /dev/kvm
           sudo chmod 666 /dev/kvm
 
@@ -67,47 +62,54 @@ jobs:
 
           mkdir -p "$HOME/.android"
           touch "$HOME/.android/emu-update-last-check.ini"
-          mkdir -p "$ANDROID_SDK_ROOT" "$ANDROID_AVD_HOME"
-
-          echo "$ANDROID_SDK_ROOT/emulator" >> "$GITHUB_PATH"
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          mkdir -p "$RUNNER_TEMP/android-cache" "$ANDROID_AVD_HOME"
 
       - name: Boot Android Emulator
         shell: bash
         run: |
           set -euxo pipefail
 
-          SDKMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
-          AVDMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/avdmanager
-          ADB="$ANDROID_SDK_ROOT/platform-tools/adb"
-          EMULATOR="$ANDROID_SDK_ROOT/emulator/emulator"
+          BASE_SDK="$ANDROID_HOME"
+          SDKMANAGER="$BASE_SDK/cmdline-tools/latest/bin/sdkmanager"
+          AVDMANAGER="$BASE_SDK/cmdline-tools/latest/bin/avdmanager"
+          ADB="$BASE_SDK/platform-tools/adb"
+          EMULATOR="$BASE_SDK/emulator/emulator"
+          CACHE="$RUNNER_TEMP/android-cache"
 
-          "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --version
-          yes 2>/dev/null | "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null 2>&1 || true
+          if [ -x "$CACHE/emulator/emulator" ]; then
+            sudo rm -rf "$BASE_SDK/emulator"
+            sudo mkdir -p "$BASE_SDK/emulator"
+            sudo cp -a "$CACHE/emulator/." "$BASE_SDK/emulator/"
+          fi
+
+          if [ -x "$CACHE/platform-tools/adb" ]; then
+            sudo rm -rf "$BASE_SDK/platform-tools"
+            sudo mkdir -p "$BASE_SDK/platform-tools"
+            sudo cp -a "$CACHE/platform-tools/." "$BASE_SDK/platform-tools/"
+          fi
+
+          if [ -f "$CACHE/system-images/android-34/google_apis/x86_64/package.xml" ]; then
+            sudo mkdir -p "$BASE_SDK/system-images/android-34/google_apis"
+            sudo rm -rf "$BASE_SDK/system-images/android-34/google_apis/x86_64"
+            sudo ln -s "$CACHE/system-images/android-34/google_apis/x86_64" \
+              "$BASE_SDK/system-images/android-34/google_apis/x86_64"
+          fi
 
           missing=0
           [ -x "$EMULATOR" ] || missing=1
           [ -x "$ADB" ] || missing=1
-          [ -d "$ANDROID_SDK_ROOT/platforms/android-34" ] || missing=1
-          [ -d "$ANDROID_SDK_ROOT/system-images/android-34/google_apis/x86_64" ] || missing=1
-          [ -f "$ANDROID_SDK_ROOT/packages.xml" ] || missing=1
-          [ -f "$ANDROID_SDK_ROOT/system-images/android-34/google_apis/x86_64/package.xml" ] || missing=1
-          [ -f "$ANDROID_SDK_ROOT/system-images/android-34/google_apis/x86_64/source.properties" ] || missing=1
+          [ -f "$BASE_SDK/system-images/android-34/google_apis/x86_64/package.xml" ] || missing=1
 
           if [ "$missing" -eq 1 ]; then
-            "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" \
+            "$SDKMANAGER" --sdk_root="$BASE_SDK" \
               "emulator" \
               "platform-tools" \
-              "platforms;android-34" \
               "system-images;android-34;google_apis;x86_64"
           fi
 
           test -x "$EMULATOR"
           test -x "$ADB"
-          test -d "$ANDROID_SDK_ROOT/system-images/android-34/google_apis/x86_64"
-          test -f "$ANDROID_SDK_ROOT/packages.xml"
-          test -f "$ANDROID_SDK_ROOT/system-images/android-34/google_apis/x86_64/package.xml"
-          test -f "$ANDROID_SDK_ROOT/system-images/android-34/google_apis/x86_64/source.properties"
+          test -f "$BASE_SDK/system-images/android-34/google_apis/x86_64/package.xml"
 
           "$EMULATOR" -accel-check
 
@@ -190,6 +192,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+
           mkdir -p "$GITHUB_WORKSPACE/.artemis-local"
 
           cat > "$GITHUB_WORKSPACE/.artemis-local/sitecustomize.py" <<'PY'
@@ -282,20 +285,44 @@ jobs:
             --disable-planner-validation \
             --standalone
 
+      - name: Refresh caches
+        if: always() && steps.dependency-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set +e
+
+          BASE_SDK="$ANDROID_HOME"
+          CACHE="$RUNNER_TEMP/android-cache"
+
+          rm -rf "$CACHE/emulator" "$CACHE/platform-tools" "$CACHE/system-images/android-34/google_apis/x86_64"
+          mkdir -p "$CACHE"
+
+          if [ -d "$BASE_SDK/emulator" ]; then
+            cp -a "$BASE_SDK/emulator" "$CACHE/"
+          fi
+
+          if [ -d "$BASE_SDK/platform-tools" ]; then
+            cp -a "$BASE_SDK/platform-tools" "$CACHE/"
+          fi
+
+          if [ -d "$BASE_SDK/system-images/android-34/google_apis/x86_64" ]; then
+            mkdir -p "$CACHE/system-images/android-34/google_apis"
+            cp -a "$BASE_SDK/system-images/android-34/google_apis/x86_64" \
+              "$CACHE/system-images/android-34/google_apis/"
+          fi
+
       - name: Save caches
         if: always() && steps.dependency-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         continue-on-error: true
         with:
           path: |
-            /home/runner/work/_temp/android-sdk/packages.xml
-            /home/runner/work/_temp/android-sdk/emulator
-            /home/runner/work/_temp/android-sdk/platform-tools
-            /home/runner/work/_temp/android-sdk/platforms/android-34
-            /home/runner/work/_temp/android-sdk/system-images/android-34/google_apis
+            /home/runner/work/_temp/android-cache/emulator
+            /home/runner/work/_temp/android-cache/platform-tools
+            /home/runner/work/_temp/android-cache/system-images/android-34/google_apis/x86_64
             /home/runner/.cache/uv
             /home/runner/.ollama/models
-          key: artemis-usersdk-qwen3vl-v6
+          key: artemis-android-qwen3vl-v7
 
       - name: Diagnostics
         if: always()
