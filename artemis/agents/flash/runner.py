@@ -41,6 +41,7 @@ import asyncio
 import base64
 from dataclasses import dataclass, field
 import json
+import os
 from pathlib import Path
 import re
 import uuid
@@ -220,6 +221,14 @@ class FlashRunner:
             from artemis.mcp.action_manifest import filter_declarations
 
             tools = filter_declarations(tools, actuator, "flash")
+
+        # Local CPU-only runs intentionally bind only the smallest safe tool set.
+        # This keeps Qwen3-VL prompt prefill small enough to complete on a
+        # free GitHub-hosted CPU runner while preserving launch + final-report
+        # semantics for smoke/integration tasks.
+        if os.environ.get("ARTEMIS_LOCAL_ONLY") == "1":
+            local_tools = {"manage_app", "report_task_status"}
+            tools = [t for t in tools if getattr(t, "name", None) in local_tools]
         return tools
 
     def _prune_intermediate_screenshots(self, messages: list[BaseMessage]) -> None:
@@ -380,11 +389,21 @@ class FlashRunner:
         blocks: list[dict] = [
             {"type": "text", "text": f"# CURRENT OBSERVATION [{ledger.elapsed_label()}]"}
         ]
-        if img_bytes:
+        include_image = bool(img_bytes) and not (
+            os.environ.get("ARTEMIS_LOCAL_ONLY") == "1" and xml_list
+        )
+        if include_image:
             img_b64 = base64.b64encode(img_bytes).decode("utf-8")
             blocks.append({"type": "text", "text": "--- Current Screenshot ---"})
             blocks.append(
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
+            )
+        elif img_bytes and os.environ.get("ARTEMIS_LOCAL_ONLY") == "1" and xml_list:
+            blocks.append(
+                {
+                    "type": "text",
+                    "text": "--- Screenshot omitted in local CPU mode; use the current UI hierarchy below. ---",
+                }
             )
         if xml_list:
             blocks.append({"type": "text", "text": f"{PRO_UI_LIST_MARKER}\n{xml_list}"})
