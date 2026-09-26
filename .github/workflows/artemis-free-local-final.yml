@@ -30,6 +30,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$HOME/.local/bin:$PATH"
           test -e /dev/kvm
           sudo chmod 666 /dev/kvm
           sudo apt-get update
