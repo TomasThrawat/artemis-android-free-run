@@ -14,12 +14,11 @@ jobs:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       ANDROID_HOME: /usr/local/lib/android/sdk
       OLLAMA_HOST: 127.0.0.1:11434
+      OLLAMA_LLM_LIBRARY: cpu
       OPENAI_API_KEY: ollama
       OPENAI_BASE_URL: http://127.0.0.1:11434/v1
       ARTEMIS_LOCAL_ONLY: "1"
       ARTEMIS_LOCAL_MODEL: qwen3-vl:2b-instruct
-      GOOGLE_API_KEY: local-only-placeholder
-      GEMINI_API_KEY: local-only-placeholder
       GIT_CONFIG_COUNT: "1"
       GIT_CONFIG_KEY_0: init.defaultBranch
       GIT_CONFIG_VALUE_0: main
@@ -35,11 +34,13 @@ jobs:
           test -e /dev/kvm
           sudo chmod 666 /dev/kvm
           sudo apt-get update
-          sudo apt-get install -y libpulse0 libx11-xcb1
+          sudo apt-get install -y libpulse0 libx11-xcb1 libx11-xcb-dev
 
           mkdir -p "$HOME/.android"
-          touch "$HOME/.android/emu-update-last-check.ini"
-          adb keygen "$HOME/.android/adbkey" >/dev/null 2>&1 || true
+          rm -f "$HOME/.android/emu-update-last-check.ini"
+          rm -f "$HOME/.android/adbkey" "$HOME/.android/adbkey.pub"
+          adb keygen "$HOME/.android/adbkey" >/tmp/adb-keygen.log 2>&1
+          chmod 600 "$HOME/.android/adbkey"
 
           ANDROID_USER_HOME="$RUNNER_TEMP/android-user-home"
           ANDROID_AVD_HOME="$RUNNER_TEMP/android-avd"
@@ -64,29 +65,36 @@ jobs:
           rm -rf "${ANDROID_AVD_HOME}/artemis.avd"
           mkdir -p "${ANDROID_AVD_HOME}"
 
-          printf '\n' | timeout 60 avdmanager create avd             --force             --name artemis             --package "system-images;android-34;google_apis;x86_64"             --abi "x86_64"             --path "${ANDROID_AVD_HOME}/artemis.avd"
+          printf "\n" | timeout 60 avdmanager create avd --force \
+            --name artemis \
+            --package "system-images;android-34;google_apis;x86_64" \
+            --abi "x86_64" \
+            --path "${ANDROID_AVD_HOME}/artemis.avd"
 
           test -f "${ANDROID_AVD_HOME}/artemis.avd/config.ini"
           grep -Fx "artemis" <<< "$(emulator -list-avds)"
 
-          nohup emulator @artemis             -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data             -gpu swiftshader_indirect -accel on             > /tmp/emulator.log 2>&1 &
+          nohup emulator @artemis \
+            -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data \
+            -no-metrics -gpu swiftshader_indirect -accel on \
+            > /tmp/emulator.log 2>&1 &
 
           adb start-server
           timeout 240 adb wait-for-device
 
           for i in $(seq 1 180); do
-            [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break
+            [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = "1" ] && break
             sleep 2
           done
 
-          test "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1"
+          test "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = "1"
           adb shell settings put global window_animation_scale 0
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 0
 
           adb devices -l
           adb shell wm size
-          adb shell dumpsys battery | sed -n '1,25p'
+          adb shell dumpsys battery | sed -n "1,25p"
 
       - name: Install Artemis
         shell: bash
@@ -111,8 +119,10 @@ jobs:
 
           curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
           ollama pull qwen3-vl:2b-instruct
-
-          curl -fsS http://127.0.0.1:11434/v1/chat/completions             -H "Content-Type: application/json"             -d '{"model":"qwen3-vl:2b-instruct","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}'             | tee /tmp/qwen-smoke.json
+          curl -fsS http://127.0.0.1:11434/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -d '{"model":"qwen3-vl:2b-instruct","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}' \
+            | tee /tmp/qwen-smoke.json
 
       - name: Install local-only runtime patch
         shell: bash
@@ -124,49 +134,59 @@ jobs:
           import os
 
           if os.environ.get("ARTEMIS_LOCAL_ONLY") == "1":
+              from artemis.config.llm import LLM
               from artemis.llm.router import ModelEndpoint, ModelFactory, ModelProvider
-              import artemis.services.llm as llm_service
 
-              def _local_google_llm(
-                  model_name: str = "gemini-3.8-flash",
-                  temperature: float | None = None,
-                  timeout: float | None = None,
-                  thinking_budget: int | None = None,
-                  thinking_level: str | None = "medium",
-                  include_thoughts: bool | None = None,
-                  enable_grounding: bool = False,
-              ):
-                  ep = ModelEndpoint(
-                      provider=ModelProvider.OLLAMA,
-                      model_name=os.environ.get(
-                          "ARTEMIS_LOCAL_MODEL",
-                          "qwen3-vl:2b-instruct",
-                      ),
-                      temperature=temperature or 0.0,
-                      timeout_seconds=timeout or 60.0,
-                      thinking_budget=None,
-                      thinking_level=None,
-                      include_thoughts=include_thoughts,
-                      enable_grounding=False,
-                  )
-                  return ModelFactory.create_model(ep)
+              _local_model = os.environ.get("ARTEMIS_LOCAL_MODEL", "qwen3-vl:2b-instruct")
+              _local_base = os.environ.get("OPENAI_BASE_URL", "http://127.0.0.1:11434/v1")
 
-              llm_service.get_google_llm = _local_google_llm
+              def _local_validate_provider(self, name: str) -> None:
+                  return None
+
+              LLM.validate_provider = _local_validate_provider
+
+              def _coerce_local(endpoint: ModelEndpoint) -> ModelEndpoint:
+                  if endpoint.provider == ModelProvider.OLLAMA:
+                      return endpoint.model_copy(update={"api_base": endpoint.api_base or _local_base})
+                  return endpoint.model_copy(update={
+                      "provider": ModelProvider.OLLAMA,
+                      "model_name": _local_model,
+                      "api_key": "ollama",
+                      "api_base": _local_base,
+                  })
+
+              _original_get_model = ModelFactory.get_model.__func__
+              _original_create_model = ModelFactory.create_model.__func__
+
+              @classmethod
+              def _local_get_model(cls, endpoint):
+                  return _original_get_model(cls, _coerce_local(endpoint))
+
+              @classmethod
+              def _local_create_model(cls, endpoint):
+                  return _original_create_model(cls, _coerce_local(endpoint))
+
+              ModelFactory.get_model = _local_get_model
+              ModelFactory.create_model = _local_create_model
           PY
 
-          PYTHONPATH="$GITHUB_WORKSPACE/.artemis-local" uv run python - <<'PY'
-          import artemis.services.llm as s
-          m = s.get_google_llm(model_name="gemini-2.5-flash")
-          print("LOCAL_FACTORY_TYPE", type(m).__name__)
-          print("LOCAL_FACTORY_BASE_URL", getattr(m, "base_url", None))
+          export PYTHONPATH="$GITHUB_WORKSPACE/.artemis-local${PYTHONPATH:+:$PYTHONPATH}"
+          uv run python - <<'PY'
+          from artemis.config.llm import LLM
+          from artemis.llm.router import ModelEndpoint, ModelFactory, ModelProvider
+          LLM(provider="google", model="gemini-test").validate_provider("Planner")
+          endpoint = ModelEndpoint(provider=ModelProvider.GOOGLE, model_name="gemini-test")
+          model = ModelFactory.get_model(endpoint)
+          print("LOCAL_VALIDATION_OK")
+          print("LOCAL_MODEL_TYPE", type(model).__name__)
+          print("LOCAL_BASE_URL", getattr(model, "openai_api_base", None))
           PY
 
       - name: Run Artemis local-only
         shell: bash
-        env:
-          PYTHONPATH: ${{ github.workspace }}/.artemis-local
         run: |
           set -euxo pipefail
+          export PYTHONPATH="$GITHUB_WORKSPACE/.artemis-local${PYTHONPATH:+:$PYTHONPATH}"
 
           echo "=== FINAL ADB CHECK ==="
           adb devices -l
@@ -174,7 +194,15 @@ jobs:
           sleep 2
 
           echo "=== ARTEMIS ==="
-          uv run artemis run             "Open Settings and report the battery percentage"             --profile flash             --without-video-recording-tools             --disable-step-summarizer             --disable-outputter             --disable-checker             --disable-planner-validation             --standalone
+          uv run artemis run \
+            "Open Settings and report the battery percentage" \
+            --profile flash \
+            --without-video-recording-tools \
+            --disable-step-summarizer \
+            --disable-outputter \
+            --disable-checker \
+            --disable-planner-validation \
+            --standalone
 
       - name: Diagnostics
         if: always()
@@ -183,5 +211,5 @@ jobs:
           set +e
           adb devices -l
           adb shell dumpsys battery
-          tail -200 /tmp/emulator.log
-          journalctl -u ollama --no-pager -n 160
+          tail -250 /tmp/emulator.log
+          journalctl -u ollama --no-pager -n 200
