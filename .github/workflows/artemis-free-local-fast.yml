@@ -2,6 +2,9 @@ name: Artemis Free Local Fast
 
 on:
   workflow_dispatch: {}
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -35,13 +38,12 @@ jobs:
             /home/runner/work/_temp/android-sdk/system-images/android-34/google_apis/x86_64
             /home/runner/.cache/uv
             /home/runner/.ollama/models
-          key: artemis-usersdk-qwen3vl-v1
+          key: artemis-usersdk-qwen3vl-v2
 
       - name: Prepare host
         shell: bash
         run: |
           set -euxo pipefail
-
           test -e /dev/kvm
           sudo chmod 666 /dev/kvm
 
@@ -81,13 +83,15 @@ jobs:
 
           SDKMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
           AVDMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/avdmanager
+          ADB="$ANDROID_SDK_ROOT/platform-tools/adb"
+          EMULATOR="$ANDROID_SDK_ROOT/emulator/emulator"
 
           "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --version
           yes | "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null 2>&1 || true
 
           missing=0
-          [ -x "$ANDROID_SDK_ROOT/emulator/emulator" ] || missing=1
-          [ -x "$ANDROID_SDK_ROOT/platform-tools/adb" ] || missing=1
+          [ -x "$EMULATOR" ] || missing=1
+          [ -x "$ADB" ] || missing=1
           [ -d "$ANDROID_SDK_ROOT/platforms/android-34" ] || missing=1
           [ -d "$ANDROID_SDK_ROOT/system-images/android-34/google_apis/x86_64" ] || missing=1
 
@@ -95,7 +99,7 @@ jobs:
             "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT"               "emulator"               "platform-tools"               "platforms;android-34"               "system-images;android-34;google_apis;x86_64"
           fi
 
-          "$ANDROID_SDK_ROOT/emulator/emulator" -accel-check
+          "$EMULATOR" -accel-check
 
           rm -rf "$ANDROID_AVD_HOME/artemis.avd"
           mkdir -p "$ANDROID_AVD_HOME"
@@ -105,27 +109,27 @@ jobs:
 
           test -f "$ANDROID_AVD_HOME/artemis.avd/config.ini"
 
-          "$ANDROID_SDK_ROOT/platform-tools/adb" start-server
-          test -e "$HOME/.android/adbkey"
+          "$ADB" start-server
+          "$ADB" devices -l
 
-          nohup "$ANDROID_SDK_ROOT/emulator/emulator" @artemis             -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data             -gpu swiftshader_indirect -accel on             > /tmp/emulator.log 2>&1 &
+          nohup "$EMULATOR" @artemis             -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data             -gpu swiftshader_indirect -accel on             > /tmp/emulator.log 2>&1 &
 
-          timeout 240 "$ANDROID_SDK_ROOT/platform-tools/adb" wait-for-device
+          timeout 240 "$ADB" wait-for-device
 
           for i in $(seq 1 150); do
-            [ "$("$ANDROID_SDK_ROOT/platform-tools/adb" shell getprop sys.boot_completed 2>/dev/null | tr -d '')" = "1" ] && break
+            [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '')" = "1" ] && break
             sleep 2
           done
 
-          test "$("$ANDROID_SDK_ROOT/platform-tools/adb" shell getprop sys.boot_completed 2>/dev/null | tr -d '')" = "1"
+          test "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '')" = "1"
 
-          "$ANDROID_SDK_ROOT/platform-tools/adb" shell settings put global window_animation_scale 0
-          "$ANDROID_SDK_ROOT/platform-tools/adb" shell settings put global transition_animation_scale 0
-          "$ANDROID_SDK_ROOT/platform-tools/adb" shell settings put global animator_duration_scale 0
+          "$ADB" shell settings put global window_animation_scale 0
+          "$ADB" shell settings put global transition_animation_scale 0
+          "$ADB" shell settings put global animator_duration_scale 0
 
-          "$ANDROID_SDK_ROOT/platform-tools/adb" devices -l
-          "$ANDROID_SDK_ROOT/platform-tools/adb" shell wm size
-          "$ANDROID_SDK_ROOT/platform-tools/adb" shell dumpsys battery | sed -n '1,25p'
+          "$ADB" devices -l
+          "$ADB" shell wm size
+          "$ADB" shell dumpsys battery | sed -n '1,25p'
 
       - name: Install Artemis
         shell: bash
@@ -163,7 +167,6 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-
           mkdir -p "$GITHUB_WORKSPACE/.artemis-local"
 
           cat > "$GITHUB_WORKSPACE/.artemis-local/sitecustomize.py" <<'PY'
@@ -259,7 +262,7 @@ jobs:
             /home/runner/work/_temp/android-sdk/system-images/android-34/google_apis/x86_64
             /home/runner/.cache/uv
             /home/runner/.ollama/models
-          key: artemis-usersdk-qwen3vl-v1
+          key: artemis-usersdk-qwen3vl-v2
 
       - name: Diagnostics
         if: always()
