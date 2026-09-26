@@ -166,6 +166,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+          export PYTHONPATH="$GITHUB_WORKSPACE/.artemis-local"
           grep -F '"max_turns": 3' config/artemis.jsonc
           uv run python - <<'PY'
           from artemis.config import initialize_llm_config
@@ -304,10 +305,9 @@ jobs:
 
       - name: Run Artemis local-only
         shell: bash
-        env:
-          PYTHONPATH: $GITHUB_WORKSPACE/.artemis-local
         run: |
           set -euxo pipefail
+          export PYTHONPATH="$GITHUB_WORKSPACE/.artemis-local"
           adb devices -l
           adb shell am start -a android.settings.SETTINGS
           sleep 2
