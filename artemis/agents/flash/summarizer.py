@@ -26,6 +26,7 @@ frame, the ``flash_summarizer.md`` neutral-wording contract, and versioned
 """
 
 import asyncio
+import os
 import base64
 from pathlib import Path
 from typing import Any
@@ -165,12 +166,19 @@ class VisualStepSummarizer(StepMemoryService):
         target_model = model_name or "gemini-2.5-flash-lite"
         self._model_name = target_model
         try:
-            if model_name:
+            # Local/offline runs must use the configured local provider even when
+            # Flash passes an explicit model name for the summarizer.
+            if os.environ.get("ARTEMIS_LOCAL_ONLY") == "1":
+                self._llm = get_llm(ctx, name="summarizer", is_utils=True)
+            elif model_name:
                 self._llm = get_google_llm(model_name=target_model, temperature=0.0)
             else:
                 self._llm = get_llm(ctx, name="summarizer", is_utils=True)
         except Exception:
-            self._llm = get_google_llm(model_name=target_model, temperature=0.0)
+            if os.environ.get("ARTEMIS_LOCAL_ONLY") == "1":
+                self._llm = get_llm(ctx, name="summarizer", is_utils=True)
+            else:
+                self._llm = get_google_llm(model_name=target_model, temperature=0.0)
         try:
             configured = getattr(self._llm, "model", None) or getattr(self._llm, "model_name", None)
             if isinstance(configured, str) and configured:
