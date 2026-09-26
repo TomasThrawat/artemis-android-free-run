@@ -1,6 +1,6 @@
 name: Artemis Free Local Final
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
   push:
     branches:
       - main
