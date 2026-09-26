@@ -33,10 +33,11 @@ jobs:
           test -e /dev/kvm
           sudo chmod 666 /dev/kvm
           sudo apt-get update
-          sudo apt-get install -y libpulse0 libx11-xcb1
+          sudo apt-get install -y libpulse0 libx11-xcb1 libx11-xcb-dev
           ANDROID_USER_HOME="$RUNNER_TEMP/android-user-home"
           ANDROID_AVD_HOME="$RUNNER_TEMP/android-avd"
-          mkdir -p "$ANDROID_USER_HOME" "$ANDROID_AVD_HOME"
+          mkdir -p "$ANDROID_USER_HOME" "$ANDROID_AVD_HOME" "$HOME/.android"
+          touch "$HOME/.android/emu-update-last-check.ini"
           echo "ANDROID_USER_HOME=$ANDROID_USER_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
           echo "${ANDROID_HOME}/emulator" >> "${GITHUB_PATH}"
@@ -52,6 +53,9 @@ jobs:
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager "emulator" "platform-tools" "platforms;android-34" "system-images;android-34;google_apis;x86_64"
           emulator -accel-check
+          command -v adb
+          mkdir -p "$HOME/.android"
+          adb keygen "$HOME/.android/adbkey"
           rm -rf "${ANDROID_AVD_HOME}/artemis.avd"
           mkdir -p "${ANDROID_AVD_HOME}"
           printf '\n' | timeout 60 avdmanager create avd --force --name artemis --package "system-images;android-34;google_apis;x86_64" --abi "x86_64" --path "${ANDROID_AVD_HOME}/artemis.avd"
@@ -97,15 +101,26 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import re
-
           p = Path("config/artemis.jsonc")
           s = p.read_text(encoding="utf-8")
           s = re.sub(r'("provider"\s*:\s*")(?:google|openai|anthropic|openrouter|xai|vertexai|vllm|custom)(")', r'\1ollama\2', s)
           s = re.sub(r'("model"\s*:\s*")[^"]*(")', r'\1qwen3-vl:2b-instruct\2', s)
           p.write_text(s, encoding="utf-8")
+          bad = [line for line in s.splitlines() if '"provider"' in line and '"google"' in line]
+          if bad: raise SystemExit(f"Google provider still present: {bad}")
           print("LOCAL_CONFIG_APPLIED")
           PY
-          rg -n '"provider"|"model"' config/artemis.jsonc
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          s = Path("config/artemis.jsonc").read_text(encoding="utf-8")
+          providers = re.findall(r'"provider"\s*:\s*"([^"]+)"', s)
+          models = re.findall(r'"model"\s*:\s*"([^"]+)"', s)
+          print("PROVIDERS", sorted(set(providers)))
+          print("MODELS", sorted(set(models)))
+          assert set(providers) <= {"ollama"}
+          assert set(models) <= {"qwen3-vl:2b-instruct"}
+          PY
 
       - name: Install local-only runtime patch
         shell: bash
