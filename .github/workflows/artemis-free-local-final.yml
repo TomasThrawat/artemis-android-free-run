@@ -58,7 +58,7 @@ jobs:
         with:
           path: |
             ~/.cache/uv
-${{ runner.temp }}/ollama-models
+            ${{ runner.temp }}/ollama-models
           key: artemis-local-v1
 
       - name: Boot Android Emulator
@@ -106,27 +106,31 @@ ${{ runner.temp }}/ollama-models
           p = Path("config/artemis.jsonc")
           s = p.read_text(encoding="utf-8")
 
-          old_default = """  "default": {
-    "provider": "google",
-    "model": "gemini-3.8-flash",
-    "thinking_level": "medium",
-    "fallback": {
-      "provider": "google",
-      "model": "gemini-3.7-flash",
-      "thinking_level": "medium"
-    }
-  },"""
+          old_default = (
+              '  "default": {\n'
+              '    "provider": "google",\n'
+              '    "model": "gemini-3.8-flash",\n'
+              '    "thinking_level": "medium",\n'
+              '    "fallback": {\n'
+              '      "provider": "google",\n'
+              '      "model": "gemini-3.7-flash",\n'
+              '      "thinking_level": "medium"\n'
+              '    }\n'
+              '  },'
+          )
 
-          new_default = """  "default": {
-    "provider": "openai",
-    "model": "qwen3-vl:2b-instruct",
-    "thinking_level": "medium",
-    "fallback": {
-      "provider": "openai",
-      "model": "qwen3-vl:2b-instruct",
-      "thinking_level": "medium"
-    }
-  },"""
+          new_default = (
+              '  "default": {\n'
+              '    "provider": "openai",\n'
+              '    "model": "qwen3-vl:2b-instruct",\n'
+              '    "thinking_level": "medium",\n'
+              '    "fallback": {\n'
+              '      "provider": "openai",\n'
+              '      "model": "qwen3-vl:2b-instruct",\n'
+              '      "thinking_level": "medium"\n'
+              '    }\n'
+              '  },'
+          )
 
           if s.count(old_default) != 1:
               raise SystemExit("Expected exactly one default LLM block")
@@ -134,6 +138,7 @@ ${{ runner.temp }}/ollama-models
 
           old_turns = '      "max_turns": 0, // Maximum reactive turns before stopping (0 = unlimited; history is bounded by transcript compression, not by a turn cap)'
           new_turns = '      "max_turns": 3, // CI smoke-test bound: prevent an unlimited local Flash loop'
+
           if s.count(old_turns) != 1:
               raise SystemExit("Expected exactly one flash max_turns=0 entry")
           s = s.replace(old_turns, new_turns, 1)
@@ -157,9 +162,6 @@ ${{ runner.temp }}/ollama-models
           assert cfg.default.fallback.model == "qwen3-vl:2b-instruct"
           assert cfg.flash.max_turns == 3
           print("ARTEMIS_CONFIG_VALID")
-          print("DEFAULT", cfg.default.provider.value, cfg.default.model)
-          print("FALLBACK", cfg.default.fallback.provider.value, cfg.default.fallback.model)
-          print("FLASH_MAX_TURNS", cfg.flash.max_turns)
           PY
 
       - name: Start local Qwen3-VL
