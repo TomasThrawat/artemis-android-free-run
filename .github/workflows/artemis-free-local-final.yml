@@ -34,10 +34,14 @@ jobs:
           sudo chmod 666 /dev/kvm
           sudo apt-get update
           sudo apt-get install -y libpulse0 libx11-xcb1 libx11-xcb-dev
+          sudo ldconfig
+          if [ ! -e /usr/lib/x86_64-linux-gnu/libX11-xcb.so ]; then
+            sudo ln -s libX11-xcb.so.1 /usr/lib/x86_64-linux-gnu/libX11-xcb.so
+          fi
           ANDROID_USER_HOME="$RUNNER_TEMP/android-user-home"
           ANDROID_AVD_HOME="$RUNNER_TEMP/android-avd"
           mkdir -p "$ANDROID_USER_HOME" "$ANDROID_AVD_HOME" "$HOME/.android"
-          touch "$HOME/.android/emu-update-last-check.ini"
+          rm -f "$HOME/.android/emu-update-last-check.ini"
           echo "ANDROID_USER_HOME=$ANDROID_USER_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
           echo "${ANDROID_HOME}/emulator" >> "${GITHUB_PATH}"
@@ -83,6 +87,30 @@ jobs:
           curl -LsSf https://astral.sh/uv/install.sh | sh
           uv sync --frozen
           uv run python --version
+
+      - name: Configure Artemis for local Qwen3-VL
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("config/artemis.jsonc")
+          s = p.read_text(encoding="utf-8")
+
+          s = re.sub(r'("provider"\s*:\s*")([^"]+)(")', r'ollama', s)
+          s = re.sub(r'("model"\s*:\s*")([^"]+)(")', r'qwen3-vl:2b-instruct', s)
+
+          p.write_text(s, encoding="utf-8")
+
+          providers = sorted(set(re.findall(r'"provider"\s*:\s*"([^"]+)"', s)))
+          models = sorted(set(re.findall(r'"model"\s*:\s*"([^"]+)"', s)))
+          print("LOCAL_PROVIDERS", providers)
+          print("LOCAL_MODELS", models)
+          assert providers == ["ollama"], providers
+          assert models == ["qwen3-vl:2b-instruct"], models
+          PY
 
       - name: Start local Qwen3-VL
         shell: bash
