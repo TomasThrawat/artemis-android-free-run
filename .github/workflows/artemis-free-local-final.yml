@@ -55,7 +55,7 @@ jobs:
         with:
           path: |
             ~/.cache/uv
-            ~/.ollama
+            /home/runner/work/_temp/ollama-models
           key: artemis-local-v1
 
       - name: Boot Android Emulator
@@ -116,9 +116,20 @@ jobs:
               if old not in block:
                   raise SystemExit("Missing config entry: " + old)
               block = block.replace(old, new, 1)
-          p.write_text(''.join(lines[:start]) + block + ''.join(lines[end:]), encoding="utf-8")
+          flash_start = next(i for i, line in enumerate(lines) if line.strip() == '"flash": {')
+          flash_end = flash_start + 1
+          while lines[flash_end].strip() != '},':
+              flash_end += 1
+          flash_block = ''.join(lines[flash_start:flash_end])
+          if '"max_turns": 0' not in flash_block:
+              raise SystemExit("Expected flash max_turns=0")
+          flash_block = flash_block.replace('"max_turns": 0', '"max_turns": 3', 1)
+          lines = lines[:start] + [block] + lines[end:]
+          lines = lines[:flash_start] + [flash_block] + lines[flash_end:]
+          p.write_text(''.join(lines), encoding="utf-8")
           print("LOCAL_CONFIG_READY")
           print(block)
+          print(flash_block)
           PY
 
       - name: Start local Qwen3-VL
@@ -126,6 +137,9 @@ jobs:
         run: |
           set -euxo pipefail
           command -v ollama > /dev/null 2>&1 || curl -fsSL https://ollama.com/install.sh | sh
+          sudo systemctl stop ollama || true
+          mkdir -p "$RUNNER_TEMP/ollama-models"
+          nohup env OLLAMA_HOST="$OLLAMA_HOST" OLLAMA_MODELS="$RUNNER_TEMP/ollama-models" ollama serve >/tmp/ollama.log 2>&1 &
           for _ in $(seq 1 60); do
             curl -fsS http://127.0.0.1:11434/api/tags > /dev/null 2>&1 && break
             sleep 2
@@ -133,6 +147,7 @@ jobs:
           curl -fsS http://127.0.0.1:11434/api/tags > /dev/null
           ollama pull qwen3-vl:2b-instruct
           curl -fsS http://127.0.0.1:11434/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"qwen3-vl:2b-instruct","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}' > /tmp/qwen-smoke.json
+          curl -fsS http://127.0.0.1:11434/api/generate -H 'Content-Type: application/json' -d '{"model":"qwen3-vl:2b-instruct","prompt":"","keep_alive":"10m"}' > /tmp/qwen-warm.json
 
       - name: Install local-only runtime patch
         shell: bash
@@ -187,3 +202,4 @@ jobs:
           adb shell dumpsys battery
           tail -200 /tmp/emulator.log
           journalctl -u ollama --no-pager -n 160
+          tail -200 /tmp/ollama.log
