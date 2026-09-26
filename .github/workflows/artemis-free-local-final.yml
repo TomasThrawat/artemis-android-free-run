@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - main
+    paths:
+      - .github/workflows/artemis-free-local-final.yml
 
 permissions:
   contents: read
@@ -19,7 +21,7 @@ jobs:
       OLLAMA_HOST: 127.0.0.1:11434
       OLLAMA_NUM_GPU: "0"
       OLLAMA_NUM_PARALLEL: "1"
-      OLLAMA_CONTEXT_LENGTH: "32768"
+      OLLAMA_CONTEXT_LENGTH: "65536"
       OLLAMA_KEEP_ALIVE: "10m"
       OLLAMA_NO_CLOUD: "1"
       OLLAMA_MODELS: /tmp/ollama-models
@@ -132,7 +134,7 @@ jobs:
           cat >/tmp/ollama-local.conf <<'CONF'
           [Service]
           Environment=OLLAMA_HOST=127.0.0.1:11434
-          Environment=OLLAMA_CONTEXT_LENGTH=32768
+          Environment=OLLAMA_CONTEXT_LENGTH=65536
           Environment=OLLAMA_NUM_GPU=0
           Environment=OLLAMA_NUM_PARALLEL=1
           Environment=OLLAMA_KEEP_ALIVE=10m
@@ -296,7 +298,7 @@ jobs:
                           "qwen3-vl:2b-instruct",
                       ),
                       temperature=temperature or 0.0,
-                      max_tokens=256,
+                      max_tokens=128,
                       timeout_seconds=timeout or 180.0,
                       is_multimodal=True,
                   )

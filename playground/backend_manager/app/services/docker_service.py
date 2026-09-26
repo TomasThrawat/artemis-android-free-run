@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import os
-from typing import Optional
 from app.config import settings
 
 logger = logging.getLogger("artemis.docker")
@@ -33,7 +34,7 @@ class DockerManagerService:
     """Manages creation, monitoring, and deletion of ephemeral Artemis session containers via Docker Socket."""
 
     def __init__(self):
-        self._client: Optional["docker.DockerClient"] = None
+        self._client: docker.DockerClient | None = None
         if DOCKER_AVAILABLE:
             try:
                 self._client = docker.DockerClient(base_url=settings.DOCKER_SOCKET_PATH)

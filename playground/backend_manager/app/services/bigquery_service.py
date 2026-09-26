@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 from datetime import datetime, timezone
 import logging
-from typing import Optional
 from app.config import settings
 from app.schemas.session_schema import SessionRecord, SessionStatus
 
@@ -34,7 +35,7 @@ class BigQueryMappingService:
 
     def __init__(self):
         self._local_cache: dict[str, SessionRecord] = {}
-        self._client: Optional["bigquery.Client"] = None
+        self._client: bigquery.Client | None = None
         self._table_ref: str = (
             f"{settings.GCP_PROJECT_ID}.{settings.BQ_DATASET}.{settings.BQ_TABLE}"
         )
