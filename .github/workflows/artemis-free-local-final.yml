@@ -2,6 +2,10 @@ name: Artemis Free Local Final
 on:
   workflow_dispatch:
 
+concurrency:
+  group: artemis-free-local-final
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -16,7 +20,8 @@ jobs:
       OPENAI_API_KEY: ollama
       OPENAI_BASE_URL: http://127.0.0.1:11434/v1
       ARTEMIS_LOCAL_ONLY: "1"
-      ARTEMIS_LOCAL_MODEL: qwen3-vl:2b-instruct
+      ARTEMIS_LOCAL_MODEL: qwen3.5:0.8b
+      ARTEMIS_LLM_HARD_TIMEOUT: "420"
       GIT_CONFIG_COUNT: "1"
       GIT_CONFIG_KEY_0: init.defaultBranch
       GIT_CONFIG_VALUE_0: main
@@ -133,11 +138,11 @@ jobs:
           new_default = (
               '  "default": {\n'
               '    "provider": "openai",\n'
-              '    "model": "qwen3-vl:2b-instruct",\n'
+              '    "model": "qwen3.5:0.8b",\n'
               '    "thinking_level": "medium",\n'
               '    "fallback": {\n'
               '      "provider": "openai",\n'
-              '      "model": "qwen3-vl:2b-instruct",\n'
+              '      "model": "qwen3.5:0.8b",\n'
               '      "thinking_level": "medium"\n'
               '    }\n'
               '  },'
@@ -150,7 +155,7 @@ jobs:
           provider_hits = len(re.findall(r'("provider"\s*:\s*")[^"]+(")', s))
           model_hits = len(re.findall(r'("model"\s*:\s*")[^"]+(")', s))
           s = re.sub(r'("provider"\s*:\s*")[^"]+(")', r'\1openai\2', s)
-          s = re.sub(r'("model"\s*:\s*")[^"]+(")', r'\1qwen3-vl:2b-instruct\2', s)
+          s = re.sub(r'("model"\s*:\s*")[^"]+(")', r'\1qwen3.5:0.8b\2', s)
           if provider_hits < 1 or model_hits < 1:
               raise SystemExit("Local LLM normalization found no provider/model fields")
           print(f"LOCAL_NORMALIZED_PROVIDERS={provider_hits}")
@@ -181,17 +186,17 @@ jobs:
           operator = cfg.get_agent("operator")
 
           assert planner.provider == "openai"
-          assert planner.model == "qwen3-vl:2b-instruct"
+          assert planner.model == "qwen3.5:0.8b"
           assert planner.fallback is not None
           assert planner.fallback.provider == "openai"
-          assert planner.fallback.model == "qwen3-vl:2b-instruct"
+          assert planner.fallback.model == "qwen3.5:0.8b"
 
           assert operator.provider == "openai"
-          assert operator.model == "qwen3-vl:2b-instruct"
+          assert operator.model == "qwen3.5:0.8b"
 
           hopper = cfg.get_utils("hopper")
           assert hopper.provider == "openai", hopper.provider
-          assert hopper.model == "qwen3-vl:2b-instruct", hopper.model
+          assert hopper.model == "qwen3.5:0.8b", hopper.model
 
           print("ARTEMIS_CONFIG_VALID")
           print("PLANNER", planner.provider, planner.model)
@@ -217,9 +222,9 @@ jobs:
             sleep 2
           done
           curl -fsS http://127.0.0.1:11434/api/tags > /dev/null
-          OLLAMA_MODELS="$OLLAMA_MODELS" ollama pull qwen3-vl:2b-instruct
-          curl -fsS http://127.0.0.1:11434/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"qwen3-vl:2b-instruct","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}' > /tmp/qwen-smoke.json
-          curl -fsS http://127.0.0.1:11434/api/generate -H 'Content-Type: application/json' -d '{"model":"qwen3-vl:2b-instruct","prompt":"","keep_alive":"10m"}' > /tmp/qwen-warm.json
+          OLLAMA_MODELS="$OLLAMA_MODELS" ollama pull qwen3.5:0.8b
+          curl -fsS http://127.0.0.1:11434/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"qwen3.5:0.8b","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}' > /tmp/qwen-smoke.json
+          curl -fsS http://127.0.0.1:11434/api/generate -H 'Content-Type: application/json' -d '{"model":"qwen3.5:0.8b","prompt":"","keep_alive":"10m"}' > /tmp/qwen-warm.json
 
       - name: Install local-only runtime patch
         shell: bash
@@ -236,7 +241,7 @@ jobs:
 
               local_model = os.environ.get(
                   "ARTEMIS_LOCAL_MODEL",
-                  "qwen3-vl:2b-instruct",
+                  "qwen3.5:0.8b",
               )
               local_base = os.environ.get(
                   "OPENAI_BASE_URL",
@@ -282,7 +287,7 @@ jobs:
                       api_key="ollama",
                       api_base=local_base,
                       temperature=temperature or 0.0,
-                      timeout_seconds=timeout or 60.0,
+                      timeout_seconds=timeout or 420.0,
                       thinking_budget=None,
                       thinking_level=None,
                       include_thoughts=include_thoughts,
@@ -301,7 +306,7 @@ jobs:
           print("LOCAL_FACTORY_TYPE", type(m).__name__)
           print("LOCAL_FACTORY_MODEL", model_name)
           print("LOCAL_FACTORY_CLIENT_BASE", client_base)
-          assert model_name == "qwen3-vl:2b-instruct", model_name
+          assert model_name == "qwen3.5:0.8b", model_name
           response = m.invoke("Reply with OK only.")
           content = str(getattr(response, "content", ""))
           print("LOCAL_FACTORY_SMOKE", content[:200])
@@ -310,6 +315,7 @@ jobs:
 
       - name: Run Artemis local-only
         shell: bash
+        timeout-minutes: 20
         run: |
           set -euxo pipefail
           export PYTHONPATH="$GITHUB_WORKSPACE/.artemis-local"
