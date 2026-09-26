@@ -21,7 +21,7 @@ jobs:
 
     steps:
       - name: Checkout Artemis
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Prepare host
         shell: bash
@@ -30,7 +30,14 @@ jobs:
           test -e /dev/kvm
           sudo chmod 666 /dev/kvm
           sudo apt-get update
-          sudo apt-get install -y libpulse0
+          sudo apt-get install -y libpulse0 libx11-xcb1
+
+          ANDROID_USER_HOME="$RUNNER_TEMP/android-user-home"
+          ANDROID_EMULATOR_HOME="$RUNNER_TEMP/android-emulator-home"
+          mkdir -p "$ANDROID_USER_HOME" "$ANDROID_EMULATOR_HOME"
+          echo "ANDROID_USER_HOME=$ANDROID_USER_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_EMULATOR_HOME=$ANDROID_EMULATOR_HOME" >> "$GITHUB_ENV"
+
           echo "${ANDROID_HOME}/emulator" >> "${GITHUB_PATH}"
           echo "${ANDROID_HOME}/platform-tools" >> "${GITHUB_PATH}"
           echo "${ANDROID_HOME}/cmdline-tools/latest/bin" >> "${GITHUB_PATH}"
@@ -44,19 +51,27 @@ jobs:
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager "emulator" "platform-tools" "platforms;android-34" "system-images;android-34;google_apis;x86_64"
           emulator -accel-check
-          rm -rf "$HOME/.android/avd/artemis.avd" "$HOME/.android/avd/artemis.ini"
+
+          rm -rf "${ANDROID_EMULATOR_HOME}/avd/artemis.avd" "${ANDROID_EMULATOR_HOME}/avd/artemis.ini"
+          mkdir -p "${ANDROID_EMULATOR_HOME}/avd"
+
           echo "no" | avdmanager create avd             -n artemis             -k "system-images;android-34;google_apis;x86_64"
+
           nohup emulator @artemis             -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data             -gpu swiftshader_indirect -accel on             > /tmp/emulator.log 2>&1 &
+
           adb start-server
           timeout 240 adb wait-for-device
+
           for i in $(seq 1 180); do
             [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break
             sleep 2
           done
+
           test "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1"
           adb shell settings put global window_animation_scale 0
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 0
+
           adb devices -l
           adb shell wm size
           adb shell dumpsys battery | sed -n '1,25p'
@@ -67,6 +82,7 @@ jobs:
           set -euxo pipefail
           curl -LsSf https://astral.sh/uv/install.sh | sh
           uv sync --frozen
+          uv run python --version
 
       - name: Start local Qwen3-VL
         shell: bash
@@ -75,12 +91,15 @@ jobs:
           if ! command -v ollama >/dev/null 2>&1; then
             curl -fsSL https://ollama.com/install.sh | sh
           fi
+
           for i in $(seq 1 60); do
             curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1 && break
             sleep 2
           done
+
           curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
           ollama pull qwen3-vl:2b-instruct
+
           curl -fsS http://127.0.0.1:11434/v1/chat/completions             -H "Content-Type: application/json"             -d '{"model":"qwen3-vl:2b-instruct","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}'             | tee /tmp/qwen-smoke.json
 
       - name: Install local-only runtime patch
@@ -88,6 +107,7 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p "$GITHUB_WORKSPACE/.artemis-local"
+
           cat > "$GITHUB_WORKSPACE/.artemis-local/sitecustomize.py" <<'PY'
           import os
 
@@ -106,7 +126,10 @@ jobs:
               ):
                   ep = ModelEndpoint(
                       provider=ModelProvider.OLLAMA,
-                      model_name=os.environ.get("ARTEMIS_LOCAL_MODEL", "qwen3-vl:2b-instruct"),
+                      model_name=os.environ.get(
+                          "ARTEMIS_LOCAL_MODEL",
+                          "qwen3-vl:2b-instruct",
+                      ),
                       temperature=temperature or 0.0,
                       timeout_seconds=timeout or 60.0,
                       thinking_budget=None,
@@ -119,8 +142,7 @@ jobs:
               llm_service.get_google_llm = _local_google_llm
           PY
 
-          export PYTHONPATH="$GITHUB_WORKSPACE/.artemis-local:${PYTHONPATH:-}"
-          PYTHONPATH="$GITHUB_WORKSPACE/.artemis-local" python - <<'PY'
+          PYTHONPATH="$GITHUB_WORKSPACE/.artemis-local" uv run python - <<'PY'
           import artemis.services.llm as s
           m = s.get_google_llm(model_name="gemini-2.5-flash")
           print("LOCAL_FACTORY_TYPE", type(m).__name__)
@@ -133,10 +155,12 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/.artemis-local
         run: |
           set -euxo pipefail
+
           echo "=== FINAL ADB CHECK ==="
           adb devices -l
           adb shell am start -a android.settings.SETTINGS
           sleep 2
+
           echo "=== ARTEMIS ==="
           uv run artemis run             "Open Settings and report the battery percentage"             --profile flash             --without-video-recording-tools             --disable-step-summarizer             --disable-outputter             --disable-checker             --disable-planner-validation             --standalone
 
@@ -144,7 +168,8 @@ jobs:
         if: always()
         shell: bash
         run: |
-          adb devices -l || true
-          adb shell dumpsys battery || true
-          tail -200 /tmp/emulator.log || true
-          journalctl -u ollama --no-pager -n 160 || true
+          set +e
+          adb devices -l
+          adb shell dumpsys battery
+          tail -200 /tmp/emulator.log
+          journalctl -u ollama --no-pager -n 160
