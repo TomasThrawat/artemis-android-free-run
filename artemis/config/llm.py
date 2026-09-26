@@ -83,6 +83,8 @@ class LLM(BaseModel):
 
     def validate_provider(self, name: str) -> None:
         """Ensure the required API key or credentials exist in settings for this provider."""
+        if os.environ.get("ARTEMIS_LOCAL_ONLY") == "1" and self.provider in ("google", "vertexai"):
+            return
         if self.provider == "openai":
             if not settings.OPENAI_API_KEY:
                 raise Exception(f"{name} requires OPENAI_API_KEY in .env")
