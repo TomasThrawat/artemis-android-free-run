@@ -294,7 +294,7 @@ class FlashRunner:
             # Never fall back to a paid Google model in local/offline runs.
             # Keep the original exception in the log, then use the same local
             # OpenAI-compatible endpoint used by the configured Ollama provider.
-            logger.exception("Failed to get operator LLM from config; using local Ollama fallback")
+            logger.error(f"Failed to get operator LLM from config; using local Ollama fallback: {e}")
             from langchain_openai import ChatOpenAI
 
             model = os.environ.get("ARTEMIS_LOCAL_MODEL", "qwen3-vl:2b-instruct")
