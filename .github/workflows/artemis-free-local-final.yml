@@ -15,9 +15,8 @@ jobs:
       ANDROID_HOME: /usr/local/lib/android/sdk
       OLLAMA_HOST: 127.0.0.1:11434
       OLLAMA_NUM_GPU: "0"
-      OLLAMA_CONTEXT_LENGTH: "6144"
+      OLLAMA_CONTEXT_LENGTH: "65536"
       OLLAMA_KEEP_ALIVE: "10m"
-      OLLAMA_NUM_PARALLEL: "1"
       OPENAI_API_KEY: ollama
       OPENAI_BASE_URL: http://127.0.0.1:11434/v1
       ARTEMIS_LOCAL_ONLY: "1"
@@ -29,12 +28,6 @@ jobs:
     steps:
       - name: Checkout Artemis
         uses: actions/checkout@v6
-
-      - name: Restore Ollama model cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/ollama-models
-          key: ollama-qwen3-vl-2b-model-v1
 
       - name: Prepare host
         shell: bash
@@ -100,8 +93,8 @@ jobs:
           if ! command -v ollama >/dev/null 2>&1; then
             curl -fsSL https://ollama.com/install.sh | sh
           fi
-          sudo mkdir -p /etc/systemd/system/ollama.service.d "$RUNNER_TEMP/ollama-models"
-          printf '%s\n'             '[Service]'             'Environment=OLLAMA_CONTEXT_LENGTH=6144'             'Environment=OLLAMA_NUM_GPU=0'             'Environment=OLLAMA_NUM_PARALLEL=1'             'Environment=OLLAMA_KEEP_ALIVE=10m'             'Environment=OLLAMA_MODELS=$RUNNER_TEMP/ollama-models'             | sudo tee /etc/systemd/system/ollama.service.d/local.conf >/dev/null
+          sudo mkdir -p /etc/systemd/system/ollama.service.d
+          printf '%s\n'             '[Service]'             'Environment=OLLAMA_CONTEXT_LENGTH=65536'             'Environment=OLLAMA_NUM_GPU=0'             'Environment=OLLAMA_KEEP_ALIVE=10m'             | sudo tee /etc/systemd/system/ollama.service.d/local.conf >/dev/null
           sudo systemctl daemon-reload
           sudo systemctl restart ollama
           for i in $(seq 1 60); do
@@ -111,8 +104,6 @@ jobs:
           curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
           ollama pull qwen3-vl:2b-instruct
           ollama ps || true
-          printf "OLLAMA_CONTEXT_LENGTH_CHECK=%s\n" "$OLLAMA_CONTEXT_LENGTH"
-          free -h || true
           python - <<'PY'
           import json, urllib.request
           payload = {
@@ -219,13 +210,6 @@ jobs:
           import os
           if os.environ.get("ARTEMIS_LOCAL_ONLY") == "1":
               import artemis.services.llm as llm_service
-              from artemis.agents.flash.runner import FlashRunner
-              from artemis.agents.validator.tool_declarations import (
-                  CLICK_TOOL,
-                  MANAGE_APP_TOOL,
-                  REPORT_TASK_STATUS_TOOL,
-                  SWIPE_TOOL,
-              )
               from artemis.llm.router import ModelEndpoint, ModelFactory, ModelProvider
               def _local_endpoint(temperature=None, timeout=None):
                   return ModelEndpoint(
@@ -242,76 +226,12 @@ jobs:
                   return ModelFactory.create_model(_local_endpoint(temperature, timeout))
               llm_service.get_google_llm = _local_google_llm
               llm_service.get_vertex_llm = _local_vertex_llm
-
-              # Local-only compact mode for Qwen3-VL 2B on CPU.
-              _original_get_tools = FlashRunner._get_tools
-              _original_render_prompt = FlashRunner._render_system_prompt
-              _original_init = FlashRunner.__init__
-
-              def _local_get_tools(self):
-                  if os.environ.get("ARTEMIS_LOCAL_ONLY") == "1":
-                      return [
-                          MANAGE_APP_TOOL,
-                          CLICK_TOOL,
-                          SWIPE_TOOL,
-                          REPORT_TASK_STATUS_TOOL,
-                      ]
-                  return _original_get_tools(self)
-
-              def _local_render_prompt(self, tools_declaration):
-                  if os.environ.get("ARTEMIS_LOCAL_ONLY") != "1":
-                      return _original_render_prompt(self, tools_declaration)
-                  return (
-                      "You are a focused Android UI automation agent.\n"
-                      f"Goal: {self.goal}\n\n"
-                      "Inspect the current screenshot and UI hierarchy before acting. "
-                      "Use only the provided tools. "
-                      "For this task, launch Android Settings only when needed, then "
-                      "find and open Battery. Use swipe only if Battery is not visible. "
-                      "Never open Gmail or any unrelated app. "
-                      "Never invent a tool name. "
-                      "When the current screen visibly shows the battery percentage, "
-                      "call report_task_status with status=completed and put the exact "
-                      "percentage in the explanation. Do not report completion before "
-                      "visual verification."
-                  )
-
-              def _local_init(self, ctx, goal, max_turns=None):
-                  _original_init(self, ctx, goal, max_turns=max_turns)
-                  if os.environ.get("ARTEMIS_LOCAL_ONLY") == "1":
-                      self.max_turns = 4
-
-              FlashRunner._get_tools = _local_get_tools
-              FlashRunner._render_system_prompt = _local_render_prompt
-              FlashRunner.__init__ = _local_init
           PY
           PYTHONPATH="$GITHUB_WORKSPACE/.artemis-local" uv run python - <<'PY'
           import artemis.services.llm as s
           m = s.get_google_llm(model_name="gemini-2.5-flash")
           print("LOCAL_GOOGLE_REDIRECT", type(m).__name__)
           print("LOCAL_GOOGLE_BASE_URL", getattr(m, "base_url", None))
-          PY
-
-      - name: Preflight compact FlashRunner
-        shell: bash
-        env:
-          PYTHONPATH: .artemis-local
-        run: |
-          set -euxo pipefail
-          uv run python - <<'PY'
-          from artemis.agents.flash.runner import FlashRunner
-
-          runner = FlashRunner.__new__(FlashRunner)
-          runner.ctx = None
-          runner.goal = "Open Settings and report the battery percentage"
-          tools = runner._get_tools()
-          prompt = runner._render_system_prompt(tools)
-          names = [t.name for t in tools]
-          print("COMPACT_TOOL_COUNT", len(names))
-          print("COMPACT_TOOLS", names)
-          print("COMPACT_PROMPT_CHARS", len(prompt))
-          assert names == ["manage_app", "click", "swipe", "report_task_status"], names
-          assert len(prompt) < 1500, len(prompt)
           PY
 
       - name: Run Artemis local-only
@@ -323,7 +243,7 @@ jobs:
           adb devices -l
           adb shell am start -a android.settings.SETTINGS
           sleep 1
-          timeout 120 uv run artemis run             "Open Settings and report the battery percentage. Only use Android Settings; do not open Gmail or any other app."             --profile flash             --without-video-recording-tools             --disable-step-summarizer             --disable-outputter             --disable-checker             --disable-planner-validation             --standalone
+          timeout 300 uv run artemis run             "Open Settings and report the battery percentage. Only use Android Settings; do not open Gmail or any other app."             --profile flash             --without-video-recording-tools             --disable-step-summarizer             --disable-outputter             --disable-checker             --disable-planner-validation             --standalone
 
       - name: Diagnostics
         if: always()
