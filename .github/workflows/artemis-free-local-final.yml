@@ -62,6 +62,7 @@ jobs:
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager "emulator" "platform-tools" "platforms;android-34" "system-images;android-34;google_apis;x86_64"
           emulator -accel-check
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/libX11-xcb.so.1 /usr/lib/x86_64-linux-gnu/libX11-xcb.so
 
           rm -rf "$ANDROID_AVD_HOME/artemis.avd"
           mkdir -p "$ANDROID_AVD_HOME"
@@ -100,6 +101,17 @@ jobs:
           adb devices -l
           adb shell wm size
           adb shell dumpsys battery | sed -n '1,25p'
+
+      - name: Restore dependency caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/uv
+            ~/.ollama
+            ${{ runner.temp }}/android-avd
+          key: artemis-local-${{ runner.os }}-${{ hashFiles('uv.lock', 'config/artemis.jsonc', '.github/workflows/artemis-free-local-final.yml') }}
+          restore-keys: |
+            artemis-local-${{ runner.os }}-
 
       - name: Install Artemis
         shell: bash
@@ -159,6 +171,30 @@ jobs:
             -d '{"model":"qwen3-vl:2b-instruct","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}' \
             | tee /tmp/qwen-smoke.json
 
+      - name: Configure Artemis for local Qwen3-VL
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path("config/artemis.jsonc")
+          s = p.read_text(encoding="utf-8")
+          edits = [
+              (r'("default"\s*:\s*\{\s*"provider"\s*:\s*)"google"', r'"openai"'),
+              (r'("default"\s*:\s*\{.*?"model"\s*:\s*)"gemini-3\.8-flash"', r'"qwen3-vl:2b-instruct"'),
+              (r'("default"\s*:\s*\{.*?"fallback"\s*:\s*\{\s*"provider"\s*:\s*)"google"', r'"openai"'),
+              (r'("default"\s*:\s*\{.*?"fallback"\s*:\s*\{.*?"model"\s*:\s*)"gemini-3\.7-flash"', r'"qwen3-vl:2b-instruct"'),
+          ]
+          counts=[]
+          for pat,rep in edits:
+              s,n=re.subn(pat,rep,s,count=1,flags=re.S)
+              counts.append(n)
+          if counts != [1,1,1,1]:
+              raise SystemExit(f"Unexpected config shape: {counts}")
+          p.write_text(s,encoding="utf-8")
+          print("LOCAL_CONFIG_READY")
+          PY
       - name: Install local-only runtime patch
         shell: bash
         run: |
@@ -232,6 +268,11 @@ jobs:
         run: |
           set +e
           adb devices -l
+          printf "ANDROID_SDK_HOME=%s
+ANDROID_USER_HOME=%s
+ANDROID_EMULATOR_HOME=%s
+ANDROID_AVD_HOME=%s
+" "$ANDROID_SDK_HOME" "$ANDROID_USER_HOME" "$ANDROID_EMULATOR_HOME" "$ANDROID_AVD_HOME"
           adb shell dumpsys battery
           tail -200 /tmp/emulator.log
           journalctl -u ollama --no-pager -n 160
