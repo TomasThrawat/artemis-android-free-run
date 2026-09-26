@@ -159,6 +159,32 @@ jobs:
               from artemis.llm.router import ModelEndpoint, ModelFactory, ModelProvider
               import artemis.services.llm as llm_service
 
+              _original_create_model = ModelFactory.create_model
+
+              def _local_create_model(cls, endpoint):
+                  provider = ModelProvider.from_string(endpoint.provider)
+                  if provider == ModelProvider.GOOGLE:
+                      endpoint = endpoint.model_copy(
+                          update={
+                              "provider": ModelProvider.OLLAMA,
+                              "model_name": os.environ.get(
+                                  "ARTEMIS_LOCAL_MODEL",
+                                  "qwen3-vl:2b-instruct",
+                              ),
+                              "api_key": os.environ.get("OPENAI_API_KEY", "ollama"),
+                              "api_base": os.environ.get(
+                                  "OPENAI_BASE_URL",
+                                  "http://127.0.0.1:11434/v1",
+                              ),
+                              "thinking_budget": None,
+                              "thinking_level": None,
+                              "enable_grounding": False,
+                          }
+                      )
+                  return _original_create_model(endpoint)
+
+              ModelFactory.create_model = classmethod(_local_create_model)
+
               def _local_google_llm(
                   model_name: str = "gemini-3.8-flash",
                   temperature: float | None = None,
@@ -187,10 +213,22 @@ jobs:
           PY
 
           PYTHONPATH="$GITHUB_WORKSPACE/.artemis-local" uv run python - <<'PY'
+          from artemis.llm.router import ModelEndpoint, ModelFactory, ModelProvider
           import artemis.services.llm as s
+
           m = s.get_google_llm(model_name="gemini-2.5-flash")
           print("LOCAL_FACTORY_TYPE", type(m).__name__)
           print("LOCAL_FACTORY_BASE_URL", getattr(m, "base_url", None))
+
+          direct = ModelFactory.create_model(
+              ModelEndpoint(
+                  provider=ModelProvider.GOOGLE,
+                  model_name="gemini-2.5-flash",
+              )
+          )
+          print("DIRECT_GOOGLE_FACTORY_TYPE", type(direct).__name__)
+          print("DIRECT_GOOGLE_FACTORY_BASE_URL", getattr(direct, "base_url", None))
+          assert "Google" not in type(direct).__name__
           PY
 
       - name: Run Artemis local-only
