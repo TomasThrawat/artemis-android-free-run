@@ -15,8 +15,9 @@ jobs:
       ANDROID_HOME: /usr/local/lib/android/sdk
       OLLAMA_HOST: 127.0.0.1:11434
       OLLAMA_NUM_GPU: "0"
-      OLLAMA_CONTEXT_LENGTH: "8192"
+      OLLAMA_CONTEXT_LENGTH: "262144"
       OLLAMA_KEEP_ALIVE: "10m"
+      OLLAMA_NUM_PARALLEL: "1"
       OPENAI_API_KEY: ollama
       OPENAI_BASE_URL: http://127.0.0.1:11434/v1
       ARTEMIS_LOCAL_ONLY: "1"
@@ -28,6 +29,12 @@ jobs:
     steps:
       - name: Checkout Artemis
         uses: actions/checkout@v6
+
+      - name: Restore Ollama model cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ollama-models
+          key: ollama-qwen3-vl-2b-model-v1
 
       - name: Prepare host
         shell: bash
@@ -93,8 +100,8 @@ jobs:
           if ! command -v ollama >/dev/null 2>&1; then
             curl -fsSL https://ollama.com/install.sh | sh
           fi
-          sudo mkdir -p /etc/systemd/system/ollama.service.d
-          printf '%s\n'             '[Service]'             'Environment=OLLAMA_CONTEXT_LENGTH=8192'             'Environment=OLLAMA_NUM_GPU=0'             'Environment=OLLAMA_KEEP_ALIVE=10m'             | sudo tee /etc/systemd/system/ollama.service.d/local.conf >/dev/null
+          sudo mkdir -p /etc/systemd/system/ollama.service.d "$RUNNER_TEMP/ollama-models"
+          printf '%s\n'             '[Service]'             'Environment=OLLAMA_CONTEXT_LENGTH=262144'             'Environment=OLLAMA_NUM_GPU=0'             'Environment=OLLAMA_NUM_PARALLEL=1'             'Environment=OLLAMA_KEEP_ALIVE=10m'             'Environment=OLLAMA_MODELS=$RUNNER_TEMP/ollama-models'             | sudo tee /etc/systemd/system/ollama.service.d/local.conf >/dev/null
           sudo systemctl daemon-reload
           sudo systemctl restart ollama
           for i in $(seq 1 60); do
@@ -104,6 +111,8 @@ jobs:
           curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
           ollama pull qwen3-vl:2b-instruct
           ollama ps || true
+          printf "OLLAMA_CONTEXT_LENGTH_CHECK=%s\n" "$OLLAMA_CONTEXT_LENGTH"
+          free -h || true
           python - <<'PY'
           import json, urllib.request
           payload = {
