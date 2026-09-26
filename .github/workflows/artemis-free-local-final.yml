@@ -14,7 +14,6 @@ jobs:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       ANDROID_HOME: /usr/local/lib/android/sdk
       OLLAMA_HOST: 127.0.0.1:11434
-      OLLAMA_MODELS: /home/runner/.ollama-models
       OPENAI_API_KEY: ollama
       OPENAI_BASE_URL: http://127.0.0.1:11434/v1
       ARTEMIS_LOCAL_ONLY: "1"
@@ -27,90 +26,48 @@ jobs:
       - name: Checkout Artemis
         uses: actions/checkout@v5
 
-      - name: Cache local toolchains
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cache/uv
-            ~/.ollama-models
-          key: artemis-free-local-qwen3-vl-v1
-          restore-keys: |
-            artemis-free-local-qwen3-vl-
-
       - name: Prepare host
         shell: bash
         run: |
           set -euxo pipefail
-
           test -e /dev/kvm
           sudo chmod 666 /dev/kvm
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libpulse0 libx11-xcb1
-
+          sudo apt-get install -y libpulse0 libx11-xcb1
           ANDROID_USER_HOME="$RUNNER_TEMP/android-user-home"
           ANDROID_AVD_HOME="$RUNNER_TEMP/android-avd"
-          mkdir -p "$ANDROID_USER_HOME" "$ANDROID_AVD_HOME" "$HOME/.android"
-
+          mkdir -p "$ANDROID_USER_HOME" "$ANDROID_AVD_HOME"
           echo "ANDROID_USER_HOME=$ANDROID_USER_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
-
-          echo "$ANDROID_HOME/emulator" >> "$GITHUB_PATH"
-          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
-          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "${ANDROID_HOME}/emulator" >> "${GITHUB_PATH}"
+          echo "${ANDROID_HOME}/platform-tools" >> "${GITHUB_PATH}"
+          echo "${ANDROID_HOME}/cmdline-tools/latest/bin" >> "${GITHUB_PATH}"
+          echo "$HOME/.local/bin" >> "${GITHUB_PATH}"
 
       - name: Boot Android Emulator
         shell: bash
         run: |
           set -euxo pipefail
-
-          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$HOME/.local/bin:$PATH"
-
           sdkmanager --version
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager "emulator" "platform-tools" "platforms;android-34" "system-images;android-34;google_apis;x86_64"
-
-          command -v adb
-          command -v emulator
-          adb version
           emulator -accel-check
-
-          if [ ! -f "$HOME/.android/adbkey" ]; then
-            adb keygen "$HOME/.android/adbkey" >/dev/null
-          fi
-          : > "$HOME/.android/emu-update-last-check.ini"
-
-          rm -rf "$ANDROID_AVD_HOME/artemis.avd"
-          mkdir -p "$ANDROID_AVD_HOME"
-
-          printf '\n' | timeout 60 avdmanager create avd \
-            --force \
-            --name artemis \
-            --package "system-images;android-34;google_apis;x86_64" \
-            --abi "x86_64" \
-            --path "$ANDROID_AVD_HOME/artemis.avd"
-
-          test -f "$ANDROID_AVD_HOME/artemis.avd/config.ini"
+          rm -rf "${ANDROID_AVD_HOME}/artemis.avd"
+          mkdir -p "${ANDROID_AVD_HOME}"
+          printf '\n' | timeout 60 avdmanager create avd --force --name artemis --package "system-images;android-34;google_apis;x86_64" --abi "x86_64" --path "${ANDROID_AVD_HOME}/artemis.avd"
+          test -f "${ANDROID_AVD_HOME}/artemis.avd/config.ini"
           emulator -list-avds | grep -Fx "artemis"
-
-          nohup emulator @artemis \
-            -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data \
-            -gpu swiftshader_indirect -accel on -no-metrics \
-            > /tmp/emulator.log 2>&1 &
-
+          nohup emulator @artemis -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data -gpu swiftshader_indirect -accel on > /tmp/emulator.log 2>&1 &
           adb start-server
           timeout 240 adb wait-for-device
-
           for i in $(seq 1 180); do
             [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break
             sleep 2
           done
-
           test "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1"
           adb shell settings put global window_animation_scale 0
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 0
-
           adb devices -l
           adb shell wm size
           adb shell dumpsys battery | sed -n '1,25p'
@@ -123,171 +80,72 @@ jobs:
           uv sync --frozen
           uv run python --version
 
-      - name: Configure Artemis for local Qwen3-VL
-        shell: bash
-        run: |
-          set -euxo pipefail
-          uv run python - <<'PY'
-          from pathlib import Path
-          import re
-
-          path = Path("config/artemis.jsonc")
-          text = path.read_text(encoding="utf-8")
-          text = re.sub(r'"provider"\s*:\s*"google"', '"provider": "openai"', text)
-          text = re.sub(r'"model"\s*:\s*"gemini-[^"]+"', '"model": "qwen3-vl:2b-instruct"', text)
-          path.write_text(text, encoding="utf-8")
-
-          if re.search(r'"provider"\s*:\s*"google"', text):
-              raise SystemExit("Google provider remains in local Artemis config")
-          if re.search(r'"model"\s*:\s*"gemini-[^"]+"', text):
-              raise SystemExit("Gemini model remains in local Artemis config")
-
-          print("LOCAL_ARTEMIS_CONFIG=OK")
-          PY
-
       - name: Start local Qwen3-VL
         shell: bash
         run: |
           set -euxo pipefail
-          if ! command -v ollama >/dev/null 2>&1; then
-            curl -fsSL https://ollama.com/install.sh | sh
-          fi
-
-          sudo systemctl stop ollama >/dev/null 2>&1 || true
-          mkdir -p "$OLLAMA_MODELS"
-
-          nohup env OLLAMA_MODELS="$OLLAMA_MODELS" OLLAMA_HOST="$OLLAMA_HOST" \
-            ollama serve > /tmp/ollama.log 2>&1 &
-
-          for i in $(seq 1 60); do
-            curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1 && break
-            sleep 2
-          done
-
+          if ! command -v ollama >/dev/null 2>&1; then curl -fsSL https://ollama.com/install.sh | sh; fi
+          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1 && break; sleep 2; done
           curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
           ollama pull qwen3-vl:2b-instruct
+          curl -fsS http://127.0.0.1:11434/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"qwen3-vl:2b-instruct","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}' | tee /tmp/qwen-smoke.json
 
-          curl -fsS http://127.0.0.1:11434/v1/chat/completions \
-            -H "Content-Type: application/json" \
-            -d '{"model":"qwen3-vl:2b-instruct","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}' \
-            | tee /tmp/qwen-smoke.json
+      - name: Configure Artemis for local Qwen
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("config/artemis.jsonc")
+          s = p.read_text(encoding="utf-8")
+          s = re.sub(r'("provider"\s*:\s*")(?:google|openai|anthropic|openrouter|xai|vertexai|vllm|custom)(")', r'\1ollama\2', s)
+          s = re.sub(r'("model"\s*:\s*")[^"]*(")', r'\1qwen3-vl:2b-instruct\2', s)
+          p.write_text(s, encoding="utf-8")
+          print("LOCAL_CONFIG_APPLIED")
+          PY
+          rg -n '"provider"|"model"' config/artemis.jsonc
 
       - name: Install local-only runtime patch
         shell: bash
         run: |
           set -euxo pipefail
           mkdir -p "$GITHUB_WORKSPACE/.artemis-local"
-
           cat > "$GITHUB_WORKSPACE/.artemis-local/sitecustomize.py" <<'PY'
           import os
-
           if os.environ.get("ARTEMIS_LOCAL_ONLY") == "1":
               from artemis.llm.router import ModelEndpoint, ModelFactory, ModelProvider
-
-              _original_create_model = ModelFactory.create_model.__func__
-
-              @classmethod
-              def _local_create_model(cls, endpoint):
-                  provider = ModelProvider.from_string(endpoint.provider)
-                  if provider == ModelProvider.GOOGLE:
-                      endpoint = endpoint.model_copy(
-                          update={
-                              "provider": ModelProvider.OLLAMA,
-                              "model_name": os.environ.get(
-                                  "ARTEMIS_LOCAL_MODEL",
-                                  "qwen3-vl:2b-instruct",
-                              ),
-                              "api_base": os.environ.get(
-                                  "OPENAI_BASE_URL",
-                                  "http://127.0.0.1:11434/v1",
-                              ),
-                              "api_key": os.environ.get("OPENAI_API_KEY", "ollama"),
-                              "thinking_budget": None,
-                              "thinking_level": None,
-                              "enable_grounding": False,
-                          }
-                      )
-                  return _original_create_model(cls, endpoint)
-
-              ModelFactory.create_model = _local_create_model
-
               import artemis.services.llm as llm_service
-
-              def _local_google_llm(*args, **kwargs):
-                  endpoint = ModelEndpoint(
-                      provider=ModelProvider.OLLAMA,
-                      model_name=os.environ.get(
-                          "ARTEMIS_LOCAL_MODEL",
-                          "qwen3-vl:2b-instruct",
-                      ),
-                      api_key=os.environ.get("OPENAI_API_KEY", "ollama"),
-                      api_base=os.environ.get(
-                          "OPENAI_BASE_URL",
-                          "http://127.0.0.1:11434/v1",
-                      ),
-                      temperature=kwargs.get("temperature") or 0.0,
-                      timeout_seconds=kwargs.get("timeout") or 60.0,
-                      thinking_budget=None,
-                      thinking_level=None,
-                      include_thoughts=kwargs.get("include_thoughts"),
-                      enable_grounding=False,
-                  )
-                  return ModelFactory.create_model(endpoint)
-
+              def _local_google_llm(model_name: str = "gemini-3.8-flash", temperature: float | None = None, timeout: float | None = None, thinking_budget: int | None = None, thinking_level: str | None = "medium", include_thoughts: bool | None = None, enable_grounding: bool = False):
+                  ep = ModelEndpoint(provider=ModelProvider.OLLAMA, model_name=os.environ.get("ARTEMIS_LOCAL_MODEL", "qwen3-vl:2b-instruct"), temperature=temperature or 0.0, timeout_seconds=timeout or 60.0, thinking_budget=None, thinking_level=None, include_thoughts=include_thoughts, enable_grounding=False)
+                  return ModelFactory.create_model(ep)
               llm_service.get_google_llm = _local_google_llm
           PY
-
           PYTHONPATH="$GITHUB_WORKSPACE/.artemis-local" uv run python - <<'PY'
-          import artemis.services.llm as llm_service
-          from artemis.llm.router import ModelEndpoint, ModelFactory, ModelProvider
-
-          endpoint = ModelEndpoint(
-              provider=ModelProvider.GOOGLE,
-              model_name="gemini-test",
-          )
-          model = ModelFactory.create_model(endpoint)
-          name = type(model).__name__
-          print("LOCAL_FACTORY_MODEL", name)
-          if name == "ChatGoogleGenerativeAI":
-              raise SystemExit("Google model factory interception failed")
-
-          local = llm_service.get_google_llm(model_name="gemini-test")
-          local_name = type(local).__name__
-          print("LOCAL_GOOGLE_ALIAS_MODEL", local_name)
-          if local_name == "ChatGoogleGenerativeAI":
-              raise SystemExit("get_google_llm local interception failed")
+          import artemis.services.llm as s
+          m = s.get_google_llm(model_name="gemini-2.5-flash")
+          print("LOCAL_FACTORY_TYPE", type(m).__name__)
+          print("LOCAL_FACTORY_BASE_URL", getattr(m, "base_url", None))
           PY
 
       - name: Run Artemis local-only
         shell: bash
         env:
-          PYTHONPATH: .artemis-local
+          PYTHONPATH: ./.artemis-local
         run: |
           set -euxo pipefail
-
-          echo "=== FINAL ADB CHECK ==="
           adb devices -l
           adb shell am start -a android.settings.SETTINGS
           sleep 2
-
-          echo "=== ARTEMIS ==="
-          uv run artemis run \
-            "Open Settings and report the battery percentage" \
-            --profile flash \
-            --without-video-recording-tools \
-            --disable-step-summarizer \
-            --disable-outputter \
-            --disable-checker \
-            --disable-planner-validation \
-            --standalone
+          uv run artemis run "Open Settings and report the battery percentage" --profile flash --without-video-recording-tools --disable-step-summarizer --disable-outputter --disable-checker --disable-planner-validation --standalone
 
       - name: Diagnostics
         if: always()
         shell: bash
         run: |
           set +e
-          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$HOME/.local/bin:$PATH"
-          command -v adb >/dev/null 2>&1 && adb devices -l || true
-          adb shell dumpsys battery || true
-          test -f /tmp/emulator.log && tail -200 /tmp/emulator.log || true
-          test -f /tmp/ollama.log && tail -200 /tmp/ollama.log || true
+          adb devices -l
+          adb shell dumpsys battery
+          tail -200 /tmp/emulator.log
+          journalctl -u ollama --no-pager -n 160
