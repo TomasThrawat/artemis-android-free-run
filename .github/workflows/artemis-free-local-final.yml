@@ -15,6 +15,8 @@ jobs:
       ANDROID_HOME: /usr/local/lib/android/sdk
       OLLAMA_HOST: 127.0.0.1:11434
       OLLAMA_NUM_GPU: "0"
+      OLLAMA_CONTEXT_LENGTH: "8192"
+      OLLAMA_KEEP_ALIVE: "10m"
       OPENAI_API_KEY: ollama
       OPENAI_BASE_URL: http://127.0.0.1:11434/v1
       ARTEMIS_LOCAL_ONLY: "1"
@@ -91,13 +93,89 @@ jobs:
           if ! command -v ollama >/dev/null 2>&1; then
             curl -fsSL https://ollama.com/install.sh | sh
           fi
+          sudo mkdir -p /etc/systemd/system/ollama.service.d
+          printf '%s\n'             '[Service]'             'Environment=OLLAMA_CONTEXT_LENGTH=8192'             'Environment=OLLAMA_NUM_GPU=0'             'Environment=OLLAMA_KEEP_ALIVE=10m'             | sudo tee /etc/systemd/system/ollama.service.d/local.conf >/dev/null
+          sudo systemctl daemon-reload
+          sudo systemctl restart ollama
           for i in $(seq 1 60); do
             curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1 && break
             sleep 2
           done
           curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
           ollama pull qwen3-vl:2b-instruct
-          curl -fsS http://127.0.0.1:11434/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"qwen3-vl:2b-instruct","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}' | tee /tmp/qwen-smoke.json
+          ollama ps || true
+          python - <<'PY'
+          import json, urllib.request
+          payload = {
+              "model": "qwen3-vl:2b-instruct",
+              "messages": [{"role": "user", "content": "Reply with OK only."}],
+              "max_tokens": 16,
+          }
+          req = urllib.request.Request(
+              "http://127.0.0.1:11434/v1/chat/completions",
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"},
+          )
+          with urllib.request.urlopen(req, timeout=60) as r:
+              body = json.load(r)
+          assert body["choices"][0]["message"]["content"].strip() == "OK", body
+          print("QWEN_TEXT_SMOKE_OK=1")
+          PY
+
+      - name: Verify local tool calling
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python - <<'PY'
+          import json, urllib.request
+          payload = {
+              "model": "qwen3-vl:2b-instruct",
+              "messages": [
+                  {
+                      "role": "system",
+                      "content": (
+                          "You are an Android automation agent. "
+                          "Use the provided tool exactly when the user asks to open Settings. "
+                          "Do not choose Gmail or any unrelated app."
+                      ),
+                  },
+                  {"role": "user", "content": "Open Settings now."},
+              ],
+              "tools": [
+                  {
+                      "type": "function",
+                      "function": {
+                          "name": "manage_app",
+                          "description": "Launch an Android app.",
+                          "parameters": {
+                              "type": "object",
+                              "properties": {
+                                  "action": {"type": "string", "enum": ["launch"]},
+                                  "app_name": {"type": "string", "enum": ["Settings"]},
+                              },
+                              "required": ["action", "app_name"],
+                          },
+                      },
+                  }
+              ],
+              "tool_choice": "required",
+              "max_tokens": 128,
+          }
+          req = urllib.request.Request(
+              "http://127.0.0.1:11434/v1/chat/completions",
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"},
+          )
+          with urllib.request.urlopen(req, timeout=90) as r:
+              body = json.load(r)
+          calls = body["choices"][0]["message"].get("tool_calls") or []
+          assert calls, body
+          fn = calls[0]["function"]
+          assert fn["name"] == "manage_app", body
+          args = json.loads(fn["arguments"])
+          assert args == {"action": "launch", "app_name": "Settings"}, body
+          print("QWEN_TOOL_SMOKE_OK=1")
+          PY
 
       - name: Configure Artemis for local Ollama
         shell: bash
@@ -134,7 +212,14 @@ jobs:
               import artemis.services.llm as llm_service
               from artemis.llm.router import ModelEndpoint, ModelFactory, ModelProvider
               def _local_endpoint(temperature=None, timeout=None):
-                  return ModelEndpoint(provider=ModelProvider.OPENAI, model_name=os.environ.get("ARTEMIS_LOCAL_MODEL", "qwen3-vl:2b-instruct"), temperature=temperature or 0.0, timeout_seconds=timeout or 60.0)
+                  return ModelEndpoint(
+                      provider=ModelProvider.OPENAI,
+                      model_name=os.environ.get("ARTEMIS_LOCAL_MODEL", "qwen3-vl:2b-instruct"),
+                      temperature=temperature or 0.0,
+                      max_tokens=256,
+                      timeout_seconds=timeout or 60.0,
+                      is_multimodal=True,
+                  )
               def _local_google_llm(model_name="gemini-3.8-flash", temperature=None, timeout=None, thinking_budget=None, thinking_level="medium", include_thoughts=None, enable_grounding=False):
                   return ModelFactory.create_model(_local_endpoint(temperature, timeout))
               def _local_vertex_llm(model_name="gemini-3.8-flash", temperature=None, timeout=None, thinking_budget=None):
@@ -156,7 +241,9 @@ jobs:
         run: |
           set -euxo pipefail
           adb devices -l
-          timeout 900 uv run artemis run "Open Settings and report the battery percentage" --profile flash --without-video-recording-tools --disable-step-summarizer --disable-outputter --disable-checker --disable-planner-validation --standalone
+          adb shell am start -a android.settings.SETTINGS
+          sleep 1
+          timeout 300 uv run artemis run             "Open Settings and report the battery percentage. Only use Android Settings; do not open Gmail or any other app."             --profile flash             --without-video-recording-tools             --disable-step-summarizer             --disable-outputter             --disable-checker             --disable-planner-validation             --standalone
 
       - name: Diagnostics
         if: always()
