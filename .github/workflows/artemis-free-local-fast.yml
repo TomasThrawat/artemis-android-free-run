@@ -91,17 +91,22 @@ jobs:
           [ -d "$ANDROID_SDK_ROOT/platforms/android-34" ] || missing=1
           [ -d "$ANDROID_SDK_ROOT/system-images/android-34/google_apis/x86_64" ] || missing=1
 
-          METADATA_DIR="$ANDROID_SDK_ROOT/system-images/android-34/google_apis"
+          METADATA_DIR="$ANDROID_SDK_ROOT/system-images/android-34/google_apis/x86_64"
           METADATA_FILE="$METADATA_DIR/package.xml"
+          SOURCE_FILE="$METADATA_DIR/source.properties"
 
-          if [ ! -f "$METADATA_FILE" ] && [ -f "$BASE_SDK/system-images/android-34/google_apis/package.xml" ]; then
+          if [ ! -f "$METADATA_FILE" ] && [ -f "$BASE_SDK/system-images/android-34/google_apis/x86_64/package.xml" ]; then
             mkdir -p "$METADATA_DIR"
-            cp "$BASE_SDK/system-images/android-34/google_apis/package.xml" "$METADATA_FILE"
+            cp "$BASE_SDK/system-images/android-34/google_apis/x86_64/package.xml" "$METADATA_FILE"
           fi
 
-          if [ ! -f "$METADATA_FILE" ]; then
-            missing=1
+          if [ ! -f "$SOURCE_FILE" ] && [ -f "$BASE_SDK/system-images/android-34/google_apis/x86_64/source.properties" ]; then
+            mkdir -p "$METADATA_DIR"
+            cp "$BASE_SDK/system-images/android-34/google_apis/x86_64/source.properties" "$SOURCE_FILE"
           fi
+
+          [ -f "$METADATA_FILE" ] || missing=1
+          [ -f "$SOURCE_FILE" ] || missing=1
 
           if [ "$missing" -eq 1 ]; then
             "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" \
@@ -115,6 +120,7 @@ jobs:
           test -x "$ADB"
           test -d "$ANDROID_SDK_ROOT/system-images/android-34/google_apis/x86_64"
           test -f "$METADATA_FILE"
+          test -f "$SOURCE_FILE"
 
           "$EMULATOR" -accel-check
 
