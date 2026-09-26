@@ -76,3 +76,74 @@ if os.environ.get("ARTEMIS_LOCAL_ONLY") == "1":
         )
 
     service_llm.get_cached_raw_model = _get_cached_raw_model_local
+
+    # Force structured tool selection for local OpenAI-compatible Qwen endpoints.
+    from langchain_core.language_models.chat_models import BaseChatModel
+    from artemis.agents.flash.runner import FlashRunner
+    import json
+    import re
+
+    _original_bind_tools = BaseChatModel.bind_tools
+    def _bind_tools_local(self, tools, *args, **kwargs):
+        if tools and "tool_choice" not in kwargs:
+            kwargs["tool_choice"] = "required"
+        return _original_bind_tools(self, tools, *args, **kwargs)
+    BaseChatModel.bind_tools = _bind_tools_local
+
+    _original_init = FlashRunner.__init__
+    def _flash_init_local(self, ctx, goal, max_turns=None):
+        if max_turns is None or max_turns <= 0:
+            max_turns = 6
+        return _original_init(self, ctx, goal, max_turns)
+    FlashRunner.__init__ = _flash_init_local
+
+    _original_resolve = FlashRunner._resolve_tool_calls
+    def _resolve_tool_calls_local(self, response, raw_text):
+        calls = _original_resolve(self, response, raw_text)
+        if calls:
+            return calls
+        found = []
+        for match in re.finditer(
+            r'<tool_call>\s*(\{.*?\})\s*</tool_call>',
+            raw_text or "",
+            flags=re.DOTALL,
+        ):
+            try:
+                payload = json.loads(match.group(1))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            function = payload.get("function")
+            if isinstance(function, dict):
+                name = function.get("name")
+                args = function.get("arguments", {})
+            else:
+                name = payload.get("name")
+                args = payload.get("arguments", payload.get("args", {}))
+            if not isinstance(name, str) or not isinstance(args, (dict, str)):
+                continue
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError:
+                    continue
+            if not isinstance(args, dict):
+                continue
+            found.append({"name": name, "args": args, "id": str(payload.get("id") or os.urandom(8).hex())})
+        return found
+    FlashRunner._resolve_tool_calls = _resolve_tool_calls_local
+
+    _original_prompt = FlashRunner._render_system_prompt
+    def _render_system_prompt_local(self, tools_declaration):
+        prompt = _original_prompt(self, tools_declaration)
+        prompt += (
+            "\n\nLOCAL QWEN EXECUTION RULES:\n"
+            "Every action turn MUST use one of the provided tools. "
+            "Use manage_app for device actions. Use report_task_status only "
+            "after the requested task is actually complete. Do not answer "
+            "an action turn with plain prose. Native tool metadata or a "
+            "tool_call XML block is required."
+        )
+        return prompt
+    FlashRunner._render_system_prompt = _render_system_prompt_local
