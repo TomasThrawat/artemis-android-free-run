@@ -34,6 +34,7 @@ from uuid import UUID
 
 from jinja2 import Template
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 
 from artemis.context import ArtemisContext
 from artemis.memory.step_memory import JobKey, StepMemoryService
@@ -166,17 +167,27 @@ class VisualStepSummarizer(StepMemoryService):
         target_model = model_name or "gemini-2.5-flash-lite"
         self._model_name = target_model
         try:
-            # Local/offline runs must use the configured local provider even when
-            # Flash passes an explicit model name for the summarizer.
             if os.environ.get("ARTEMIS_LOCAL_ONLY") == "1":
-                self._llm = get_llm(ctx, name="summarizer", is_utils=True)
+                self._llm = ChatOpenAI(
+                    model=os.environ.get("ARTEMIS_LOCAL_MODEL", "qwen3-vl:2b-instruct"),
+                    temperature=0.0,
+                    api_key=os.environ.get("OPENAI_API_KEY", "ollama"),
+                    base_url=os.environ.get("OPENAI_BASE_URL", "http://127.0.0.1:11434/v1"),
+                    timeout=60.0,
+                )
             elif model_name:
                 self._llm = get_google_llm(model_name=target_model, temperature=0.0)
             else:
                 self._llm = get_llm(ctx, name="summarizer", is_utils=True)
         except Exception:
             if os.environ.get("ARTEMIS_LOCAL_ONLY") == "1":
-                self._llm = get_llm(ctx, name="summarizer", is_utils=True)
+                self._llm = ChatOpenAI(
+                    model=os.environ.get("ARTEMIS_LOCAL_MODEL", "qwen3-vl:2b-instruct"),
+                    temperature=0.0,
+                    api_key=os.environ.get("OPENAI_API_KEY", "ollama"),
+                    base_url=os.environ.get("OPENAI_BASE_URL", "http://127.0.0.1:11434/v1"),
+                    timeout=60.0,
+                )
             else:
                 self._llm = get_google_llm(model_name=target_model, temperature=0.0)
         try:
