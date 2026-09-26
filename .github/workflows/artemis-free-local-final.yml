@@ -31,12 +31,15 @@ jobs:
 
       - name: Prepare host
         shell: bash
+        timeout-minutes: 5
         run: |
           set -euxo pipefail
           test -e /dev/kvm
           sudo chmod 666 /dev/kvm
-          sudo apt-get update
-          sudo apt-get install -y libpulse0 libx11-xcb1
+          if ! dpkg -s libpulse0 libx11-xcb1 >/dev/null 2>&1; then
+            timeout 120 sudo apt-get update -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20
+            timeout 120 sudo apt-get install -y -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 libpulse0 libx11-xcb1
+          fi
           sudo ldconfig
           sudo ln -sf libX11-xcb.so.1 /usr/lib/x86_64-linux-gnu/libX11-xcb.so
           export ANDROID_SDK_HOME="$RUNNER_TEMP/android-sdk-home"
