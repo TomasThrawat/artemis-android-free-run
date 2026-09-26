@@ -32,6 +32,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Restore caches
+        id: dependency-cache
         uses: actions/cache/restore@v5
         with:
           path: |
@@ -41,7 +42,10 @@ jobs:
             /home/runner/work/_temp/android-sdk/system-images/android-34/google_apis/x86_64
             /home/runner/.cache/uv
             /home/runner/.ollama/models
-          key: artemis-usersdk-qwen3vl-v3
+          key: artemis-usersdk-qwen3vl-v4
+          restore-keys: |
+            artemis-usersdk-qwen3vl-v3
+            artemis-usersdk-qwen3vl-
 
       - name: Prepare host
         shell: bash
@@ -77,7 +81,7 @@ jobs:
           EMULATOR="$ANDROID_SDK_ROOT/emulator/emulator"
 
           "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --version
-          yes | "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null 2>&1 || true
+          yes 2>/dev/null | "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null 2>&1 || true
 
           missing=0
           [ -x "$EMULATOR" ] || missing=1
@@ -94,7 +98,7 @@ jobs:
           rm -rf "$ANDROID_AVD_HOME/artemis.avd"
           mkdir -p "$ANDROID_AVD_HOME"
 
-          echo no | timeout 60 "$AVDMANAGER" create avd             --sdk_root="$ANDROID_SDK_ROOT"             --force             --name artemis             --package "system-images;android-34;google_apis;x86_64"             --abi x86_64             --path "$ANDROID_AVD_HOME/artemis.avd"
+          echo no | timeout 60 "$AVDMANAGER" create avd             --force             --name artemis             --package "system-images;android-34;google_apis;x86_64"             --abi x86_64             --path "$ANDROID_AVD_HOME/artemis.avd"
 
           test -f "$ANDROID_AVD_HOME/artemis.avd/config.ini"
 
@@ -243,8 +247,9 @@ jobs:
           uv run artemis run             "Open Settings and report the battery percentage"             --profile flash             --without-video-recording-tools             --disable-step-summarizer             --disable-outputter             --disable-checker             --disable-planner-validation             --standalone
 
       - name: Save caches
-        if: always()
+        if: always() && steps.dependency-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
+        continue-on-error: true
         with:
           path: |
             /home/runner/work/_temp/android-sdk/emulator
@@ -253,7 +258,7 @@ jobs:
             /home/runner/work/_temp/android-sdk/system-images/android-34/google_apis/x86_64
             /home/runner/.cache/uv
             /home/runner/.ollama/models
-          key: artemis-usersdk-qwen3vl-v3
+          key: artemis-usersdk-qwen3vl-v4
 
       - name: Diagnostics
         if: always()
@@ -265,6 +270,6 @@ jobs:
           echo "=== BATTERY ==="
           adb shell dumpsys battery
           echo "=== EMULATOR LOG ==="
-          tail -250 /tmp/emulator.log
+          test ! -f /tmp/emulator.log || tail -250 /tmp/emulator.log
           echo "=== OLLAMA LOG ==="
-          tail -250 /tmp/ollama.log
+          test ! -f /tmp/ollama.log || tail -250 /tmp/ollama.log
