@@ -23,6 +23,7 @@ from collections.abc import Awaitable, Callable, Coroutine
 from contextvars import ContextVar, Token
 import functools
 import logging
+import os
 from pathlib import Path
 import re
 import sys
@@ -868,6 +869,13 @@ async def invoke_llm_with_timeout_message[T](
     hard_timeout: int = 180,
 ) -> T:
     """Send an LLM call and display a countdown / timeout message if delayed."""
+    configured_hard_timeout = os.getenv("ARTEMIS_LLM_HARD_TIMEOUT")
+    if configured_hard_timeout:
+        try:
+            hard_timeout = max(hard_timeout, int(configured_hard_timeout))
+        except ValueError:
+            pass
+
     llm_task = asyncio.create_task(llm_call)
     waiter_task = asyncio.create_task(asyncio.sleep(timeout_seconds))
     try:
