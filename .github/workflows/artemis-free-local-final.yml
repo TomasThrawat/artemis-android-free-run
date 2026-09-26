@@ -20,6 +20,9 @@ jobs:
       OPENAI_BASE_URL: http://127.0.0.1:11434/v1
       ARTEMIS_LOCAL_ONLY: "1"
       ARTEMIS_LOCAL_MODEL: qwen3-vl:2b-instruct
+      OLLAMA_MODELS: ${{ runner.temp }}/ollama-models
+      OLLAMA_LLM_LIBRARY: cpu
+      OLLAMA_NO_CLOUD: "1"
 
     steps:
       - name: Checkout Artemis
@@ -51,11 +54,11 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Restore caches
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/uv
-            /home/runner/work/_temp/ollama-models
+${{ runner.temp }}/ollama-models
           key: artemis-local-v1
 
       - name: Boot Android Emulator
@@ -71,6 +74,7 @@ jobs:
           fi
           test -f "$ANDROID_AVD_HOME/artemis.avd/config.ini"
           emulator -list-avds | grep -Fx artemis
+          rm -f "$ANDROID_EMULATOR_HOME/emu-update-last-check.ini"
           adb start-server
           nohup emulator @artemis -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data -gpu swiftshader_indirect -accel on -no-metrics > /tmp/emulator.log 2>&1 &
           timeout 240 adb wait-for-device
@@ -98,38 +102,64 @@ jobs:
           set -euxo pipefail
           uv run python - <<'PY'
           from pathlib import Path
+
           p = Path("config/artemis.jsonc")
           s = p.read_text(encoding="utf-8")
-          lines = s.splitlines(True)
-          start = next(i for i, line in enumerate(lines) if line.strip() == '"default": {')
-          end = start + 1
-          while lines[end].strip() != '},':
-              end += 1
-          block = ''.join(lines[start:end])
-          edits = (
-              ('"provider": "google"', '"provider": "openai"'),
-              ('"model": "gemini-3.8-flash"', '"model": "qwen3-vl:2b-instruct"'),
-              ('"provider": "google"', '"provider": "openai"'),
-              ('"model": "gemini-3.7-flash"', '"model": "qwen3-vl:2b-instruct"'),
-          )
-          for old, new in edits:
-              if old not in block:
-                  raise SystemExit("Missing config entry: " + old)
-              block = block.replace(old, new, 1)
-          flash_start = next(i for i, line in enumerate(lines) if line.strip() == '"flash": {')
-          flash_end = flash_start + 1
-          while lines[flash_end].strip() != '},':
-              flash_end += 1
-          flash_block = ''.join(lines[flash_start:flash_end])
-          if '"max_turns": 0' not in flash_block:
-              raise SystemExit("Expected flash max_turns=0")
-          flash_block = flash_block.replace('"max_turns": 0', '"max_turns": 3', 1)
-          lines = lines[:start] + [block] + lines[end:]
-          lines = lines[:flash_start] + [flash_block] + lines[flash_end:]
-          p.write_text(''.join(lines), encoding="utf-8")
+
+          old_default = """  "default": {
+    "provider": "google",
+    "model": "gemini-3.8-flash",
+    "thinking_level": "medium",
+    "fallback": {
+      "provider": "google",
+      "model": "gemini-3.7-flash",
+      "thinking_level": "medium"
+    }
+  },"""
+
+          new_default = """  "default": {
+    "provider": "openai",
+    "model": "qwen3-vl:2b-instruct",
+    "thinking_level": "medium",
+    "fallback": {
+      "provider": "openai",
+      "model": "qwen3-vl:2b-instruct",
+      "thinking_level": "medium"
+    }
+  },"""
+
+          if s.count(old_default) != 1:
+              raise SystemExit("Expected exactly one default LLM block")
+          s = s.replace(old_default, new_default, 1)
+
+          old_turns = '      "max_turns": 0, // Maximum reactive turns before stopping (0 = unlimited; history is bounded by transcript compression, not by a turn cap)'
+          new_turns = '      "max_turns": 3, // CI smoke-test bound: prevent an unlimited local Flash loop'
+          if s.count(old_turns) != 1:
+              raise SystemExit("Expected exactly one flash max_turns=0 entry")
+          s = s.replace(old_turns, new_turns, 1)
+
+          p.write_text(s, encoding="utf-8")
           print("LOCAL_CONFIG_READY")
-          print(block)
-          print(flash_block)
+          PY
+
+      - name: Validate local Artemis config
+        shell: bash
+        run: |
+          set -euxo pipefail
+          uv run python - <<'PY'
+          from artemis.config import initialize_llm_config
+
+          cfg = initialize_llm_config()
+          assert cfg.default.provider.value == "openai"
+          assert cfg.default.model == "qwen3-vl:2b-instruct"
+          assert cfg.default.fallback is not None
+          assert cfg.default.fallback.provider.value == "openai"
+          assert cfg.default.fallback.model == "qwen3-vl:2b-instruct"
+          assert cfg.flash.max_turns == 3
+          print("ARTEMIS_CONFIG_VALID")
+          print("DEFAULT", cfg.default.provider.value, cfg.default.model)
+          print("FALLBACK", cfg.default.fallback.provider.value, cfg.default.fallback.model)
+          print("FLASH_MAX_TURNS", cfg.flash.max_turns)
           PY
 
       - name: Start local Qwen3-VL
@@ -137,15 +167,15 @@ jobs:
         run: |
           set -euxo pipefail
           command -v ollama > /dev/null 2>&1 || curl -fsSL https://ollama.com/install.sh | sh
-          sudo systemctl stop ollama || true
-          mkdir -p "$RUNNER_TEMP/ollama-models"
-          nohup env OLLAMA_HOST="$OLLAMA_HOST" OLLAMA_MODELS="$RUNNER_TEMP/ollama-models" ollama serve >/tmp/ollama.log 2>&1 &
+          sudo systemctl disable --now ollama || true
+          mkdir -p "$OLLAMA_MODELS"
+          nohup ollama serve >/tmp/ollama.log 2>&1 &
           for _ in $(seq 1 60); do
             curl -fsS http://127.0.0.1:11434/api/tags > /dev/null 2>&1 && break
             sleep 2
           done
           curl -fsS http://127.0.0.1:11434/api/tags > /dev/null
-          ollama pull qwen3-vl:2b-instruct
+          OLLAMA_MODELS="$OLLAMA_MODELS" ollama pull qwen3-vl:2b-instruct
           curl -fsS http://127.0.0.1:11434/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"qwen3-vl:2b-instruct","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}' > /tmp/qwen-smoke.json
           curl -fsS http://127.0.0.1:11434/api/generate -H 'Content-Type: application/json' -d '{"model":"qwen3-vl:2b-instruct","prompt":"","keep_alive":"10m"}' > /tmp/qwen-warm.json
 
