@@ -1,0 +1,67 @@
+name: Qwen Vision Smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qwen-vision:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 12
+    env:
+      OLLAMA_HOST: 127.0.0.1:11434
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Start Qwen
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if ! command -v ollama >/dev/null 2>&1; then curl -fsSL https://ollama.com/install.sh | sh; fi
+          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1 && break; sleep 2; done
+          curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
+          ollama pull qwen3-vl:2b-instruct
+
+      - name: Vision inference timing
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import base64, json, time
+          from pathlib import Path
+          try:
+              from PIL import Image, ImageDraw
+          except Exception:
+              raise SystemExit("Pillow unavailable")
+          p=Path("/tmp/test.png")
+          img=Image.new("RGB",(320,180),"white")
+          d=ImageDraw.Draw(img)
+          d.text((20,70),"Settings  Battery  100%",fill="black")
+          img.save(p)
+          b64=base64.b64encode(p.read_bytes()).decode()
+          payload={
+              "model":"qwen3-vl:2b-instruct",
+              "messages":[{
+                  "role":"user",
+                  "content":[
+                      {"type":"text","text":"Read the battery percentage shown in this image. Reply with the number only."},
+                      {"type":"image_url","image_url":{"url":"data:image/png;base64,"+b64}}
+                  ]
+              }],
+              "max_tokens":16
+          }
+          t=time.time()
+          import urllib.request
+          req=urllib.request.Request(
+              "http://127.0.0.1:11434/v1/chat/completions",
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type":"application/json"},
+          )
+          with urllib.request.urlopen(req,timeout=300) as r:
+              out=r.read().decode()
+          print("SECONDS", round(time.time()-t,2))
+          print(out)
+          PY
