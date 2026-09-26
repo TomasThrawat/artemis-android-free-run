@@ -180,7 +180,7 @@ jobs:
           assert operator.provider == "openai"
           assert operator.model == "qwen3-vl:2b-instruct"
 
-          hopper = cfg.get_agent("hopper")
+          hopper = cfg.get_utils("hopper")
           assert hopper.provider == "openai", hopper.provider
           assert hopper.model == "qwen3-vl:2b-instruct", hopper.model
 
