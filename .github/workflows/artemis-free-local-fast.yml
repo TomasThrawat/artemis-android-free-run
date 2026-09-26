@@ -36,16 +36,17 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: |
+            /home/runner/work/_temp/android-sdk/packages.xml
             /home/runner/work/_temp/android-sdk/emulator
             /home/runner/work/_temp/android-sdk/platform-tools
             /home/runner/work/_temp/android-sdk/platforms/android-34
             /home/runner/work/_temp/android-sdk/system-images/android-34/google_apis
             /home/runner/.cache/uv
             /home/runner/.ollama/models
-          key: artemis-usersdk-qwen3vl-v5
+          key: artemis-usersdk-qwen3vl-v6
           restore-keys: |
+            artemis-usersdk-qwen3vl-v5
             artemis-usersdk-qwen3vl-v4
-            artemis-usersdk-qwen3vl-v3
             artemis-usersdk-qwen3vl-
 
       - name: Prepare host
@@ -80,7 +81,6 @@ jobs:
           AVDMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/avdmanager
           ADB="$ANDROID_SDK_ROOT/platform-tools/adb"
           EMULATOR="$ANDROID_SDK_ROOT/emulator/emulator"
-          BASE_SDK=/usr/local/lib/android/sdk
 
           "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --version
           yes 2>/dev/null | "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null 2>&1 || true
@@ -90,23 +90,9 @@ jobs:
           [ -x "$ADB" ] || missing=1
           [ -d "$ANDROID_SDK_ROOT/platforms/android-34" ] || missing=1
           [ -d "$ANDROID_SDK_ROOT/system-images/android-34/google_apis/x86_64" ] || missing=1
-
-          METADATA_DIR="$ANDROID_SDK_ROOT/system-images/android-34/google_apis/x86_64"
-          METADATA_FILE="$METADATA_DIR/package.xml"
-          SOURCE_FILE="$METADATA_DIR/source.properties"
-
-          if [ ! -f "$METADATA_FILE" ] && [ -f "$BASE_SDK/system-images/android-34/google_apis/x86_64/package.xml" ]; then
-            mkdir -p "$METADATA_DIR"
-            cp "$BASE_SDK/system-images/android-34/google_apis/x86_64/package.xml" "$METADATA_FILE"
-          fi
-
-          if [ ! -f "$SOURCE_FILE" ] && [ -f "$BASE_SDK/system-images/android-34/google_apis/x86_64/source.properties" ]; then
-            mkdir -p "$METADATA_DIR"
-            cp "$BASE_SDK/system-images/android-34/google_apis/x86_64/source.properties" "$SOURCE_FILE"
-          fi
-
-          [ -f "$METADATA_FILE" ] || missing=1
-          [ -f "$SOURCE_FILE" ] || missing=1
+          [ -f "$ANDROID_SDK_ROOT/packages.xml" ] || missing=1
+          [ -f "$ANDROID_SDK_ROOT/system-images/android-34/google_apis/x86_64/package.xml" ] || missing=1
+          [ -f "$ANDROID_SDK_ROOT/system-images/android-34/google_apis/x86_64/source.properties" ] || missing=1
 
           if [ "$missing" -eq 1 ]; then
             "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" \
@@ -119,8 +105,9 @@ jobs:
           test -x "$EMULATOR"
           test -x "$ADB"
           test -d "$ANDROID_SDK_ROOT/system-images/android-34/google_apis/x86_64"
-          test -f "$METADATA_FILE"
-          test -f "$SOURCE_FILE"
+          test -f "$ANDROID_SDK_ROOT/packages.xml"
+          test -f "$ANDROID_SDK_ROOT/system-images/android-34/google_apis/x86_64/package.xml"
+          test -f "$ANDROID_SDK_ROOT/system-images/android-34/google_apis/x86_64/source.properties"
 
           "$EMULATOR" -accel-check
 
@@ -301,13 +288,14 @@ jobs:
         continue-on-error: true
         with:
           path: |
+            /home/runner/work/_temp/android-sdk/packages.xml
             /home/runner/work/_temp/android-sdk/emulator
             /home/runner/work/_temp/android-sdk/platform-tools
             /home/runner/work/_temp/android-sdk/platforms/android-34
             /home/runner/work/_temp/android-sdk/system-images/android-34/google_apis
             /home/runner/.cache/uv
             /home/runner/.ollama/models
-          key: artemis-usersdk-qwen3vl-v5
+          key: artemis-usersdk-qwen3vl-v6
 
       - name: Diagnostics
         if: always()
