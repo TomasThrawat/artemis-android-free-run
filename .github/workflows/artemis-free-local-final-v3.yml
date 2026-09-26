@@ -46,6 +46,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+          export HOME="$ANDROID_USER_HOME"
+          mkdir -p "$HOME/.android"
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager "emulator" "platform-tools" "platforms;android-34" "system-images;android-34;google_apis;x86_64"
           emulator -accel-check
@@ -54,14 +56,13 @@ jobs:
           printf '\n' | timeout 60 avdmanager create avd --force --name artemis --package "system-images;android-34;google_apis;x86_64" --abi x86_64 --path "$ANDROID_AVD_HOME/artemis.avd"
           test -f "$ANDROID_AVD_HOME/artemis.avd/config.ini"
           emulator -list-avds | grep -Fx artemis
-          ln -sfn /usr/lib/x86_64-linux-gnu/libX11-xcb.so.1 /usr/lib/x86_64-linux-gnu/libX11-xcb.so || true
           export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
           nohup emulator @artemis -no-window -no-audio -no-boot-anim -no-snapshot -no-metrics -wipe-data -gpu swiftshader_indirect -accel on >/tmp/emulator.log 2>&1 &
           if [ ! -s "$HOME/.android/adbkey" ]; then
             adb keygen "$HOME/.android/adbkey"
           fi
           test -s "$HOME/.android/adbkey"
-          export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
+          export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
           adb start-server
           timeout 240 adb wait-for-device
           for i in $(seq 1 180); do
@@ -80,6 +81,7 @@ jobs:
           set -euxo pipefail
           curl -LsSf https://astral.sh/uv/install.sh | sh
           uv sync --frozen
+          uv pip install --python .venv/bin/python "langchain-ollama==1.1.0"
           uv run ruff check .
           uv run python -m compileall -q artemis .artemis-local
       - name: Start local Qwen3-VL
@@ -96,47 +98,29 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          python3 - <<'PY'
-          import json
+          uv run python - <<'PY'
           import os
-          import urllib.request
+          from langchain_core.tools import tool
+          from langchain_ollama import ChatOllama
 
-          tool = {
-              "type": "function",
-              "function": {
-                  "name": "report_task_status",
-                  "description": "Report task completion.",
-                  "parameters": {
-                      "type": "object",
-                      "properties": {
-                          "status": {"type": "string"},
-                          "explanation": {"type": "string"},
-                      },
-                      "required": ["status", "explanation"],
-                  },
-              },
-          }
-          body = json.dumps({
-              "model": os.environ["ARTEMIS_LOCAL_MODEL"],
-              "messages": [{"role": "user", "content": "Use the provided tool now."}],
-              "tools": [tool],
-              "tool_choice": "required",
-              "max_tokens": 64,
-              "stream": False,
-          }).encode()
-          req = urllib.request.Request(
-              "http://127.0.0.1:11434/v1/chat/completions",
-              data=body,
-              headers={"Content-Type": "application/json"},
+          @tool
+          def report_task_status(status: str, explanation: str) -> str:
+              """Report task completion."""
+              return f"{status}: {explanation}"
+
+          llm = ChatOllama(
+              model=os.environ["ARTEMIS_LOCAL_MODEL"],
+              base_url="http://127.0.0.1:11434",
+              temperature=0.0,
           )
-          with urllib.request.urlopen(req, timeout=90) as response:
-              result = json.load(response)
-          message = result["choices"][0]["message"]
-          calls = message.get("tool_calls") or []
-          content = message.get("content") or ""
-          assert calls or "<tool_call>" in content, result
-          print("QWEN_TOOL_CALL_PROBE_OK")
-          print("NATIVE_TOOL_CALLS", len(calls))
+          response = llm.bind_tools([report_task_status], tool_choice="required").invoke(
+              "Use the report_task_status tool now. Set status to success and explain that the probe worked."
+          )
+          calls = getattr(response, "tool_calls", None) or []
+          assert calls, response
+          assert calls[0]["name"] == "report_task_status", calls
+          print("QWEN_NATIVE_TOOL_CALL_OK")
+          print("TOOL_NAME", calls[0]["name"])
           PY
       - name: Configure Artemis for local provider
         shell: bash
