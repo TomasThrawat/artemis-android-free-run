@@ -1,9 +1,6 @@
 name: Artemis Free Local Final
 on:
-  workflow_dispatch: {}
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -268,10 +265,17 @@ jobs:
           PYTHONPATH="$GITHUB_WORKSPACE/.artemis-local" uv run python - <<'PY'
           import artemis.services.llm as s
           m = s.get_google_llm(model_name="gemini-2.5-flash")
-          base = str(getattr(m, "base_url", ""))
+          model_name = str(getattr(m, "model_name", ""))
+          root_client = getattr(m, "root_client", None)
+          client_base = str(getattr(root_client, "base_url", ""))
           print("LOCAL_FACTORY_TYPE", type(m).__name__)
-          print("LOCAL_FACTORY_BASE_URL", base)
-          assert "11434/v1" in base, base
+          print("LOCAL_FACTORY_MODEL", model_name)
+          print("LOCAL_FACTORY_CLIENT_BASE", client_base)
+          assert model_name == "qwen3-vl:2b-instruct", model_name
+          response = m.invoke("Reply with OK only.")
+          content = str(getattr(response, "content", ""))
+          print("LOCAL_FACTORY_SMOKE", content[:200])
+          assert content.strip(), "Local ChatOpenAI returned empty content"
           PY
 
       - name: Run Artemis local-only
