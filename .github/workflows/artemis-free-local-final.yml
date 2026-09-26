@@ -161,18 +161,18 @@ jobs:
           planner = cfg.get_agent("planner")
           operator = cfg.get_agent("operator")
 
-          assert planner.provider.value == "openai"
+          assert planner.provider == "openai"
           assert planner.model == "qwen3-vl:2b-instruct"
           assert planner.fallback is not None
-          assert planner.fallback.provider.value == "openai"
+          assert planner.fallback.provider == "openai"
           assert planner.fallback.model == "qwen3-vl:2b-instruct"
 
-          assert operator.provider.value == "openai"
+          assert operator.provider == "openai"
           assert operator.model == "qwen3-vl:2b-instruct"
 
           print("ARTEMIS_CONFIG_VALID")
-          print("PLANNER", planner.provider.value, planner.model)
-          print("OPERATOR", operator.provider.value, operator.model)
+          print("PLANNER", planner.provider, planner.model)
+          print("OPERATOR", operator.provider, operator.model)
           PY
 
       - name: Start local Qwen3-VL
@@ -240,11 +240,12 @@ jobs:
 
       - name: Diagnostics
         if: always()
+        continue-on-error: true
         shell: bash
         run: |
           set +e
           adb devices -l
-          adb shell dumpsys battery
-          tail -200 /tmp/emulator.log
-          journalctl -u ollama --no-pager -n 160
-          tail -200 /tmp/ollama.log
+          adb shell dumpsys battery || true
+          tail -200 /tmp/emulator.log || true
+          journalctl -u ollama --no-pager -n 160 || true
+          tail -200 /tmp/ollama.log || true
