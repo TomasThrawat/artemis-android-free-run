@@ -39,7 +39,7 @@ jobs:
           mkdir -p "$HOME/.android"
           rm -f "$HOME/.android/emu-update-last-check.ini"
           rm -f "$HOME/.android/adbkey" "$HOME/.android/adbkey.pub"
-          adb keygen "$HOME/.android/adbkey" >/tmp/adb-keygen.log 2>&1
+          "$ANDROID_HOME/platform-tools/adb" keygen "$HOME/.android/adbkey" >/tmp/adb-keygen.log 2>&1
           chmod 600 "$HOME/.android/adbkey"
 
           ANDROID_USER_HOME="$RUNNER_TEMP/android-user-home"
@@ -64,7 +64,6 @@ jobs:
 
           rm -rf "${ANDROID_AVD_HOME}/artemis.avd"
           mkdir -p "${ANDROID_AVD_HOME}"
-
           printf "\n" | timeout 60 avdmanager create avd --force \
             --name artemis \
             --package "system-images;android-34;google_apis;x86_64" \
@@ -81,17 +80,14 @@ jobs:
 
           adb start-server
           timeout 240 adb wait-for-device
-
           for i in $(seq 1 180); do
             [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = "1" ] && break
             sleep 2
           done
-
           test "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = "1"
           adb shell settings put global window_animation_scale 0
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 0
-
           adb devices -l
           adb shell wm size
           adb shell dumpsys battery | sed -n "1,25p"
@@ -111,12 +107,10 @@ jobs:
           if ! command -v ollama >/dev/null 2>&1; then
             curl -fsSL https://ollama.com/install.sh | sh
           fi
-
           for i in $(seq 1 60); do
             curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1 && break
             sleep 2
           done
-
           curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
           ollama pull qwen3-vl:2b-instruct
           curl -fsS http://127.0.0.1:11434/v1/chat/completions \
@@ -129,7 +123,6 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p "$GITHUB_WORKSPACE/.artemis-local"
-
           cat > "$GITHUB_WORKSPACE/.artemis-local/sitecustomize.py" <<'PY'
           import os
 
@@ -187,12 +180,10 @@ jobs:
         run: |
           set -euxo pipefail
           export PYTHONPATH="$GITHUB_WORKSPACE/.artemis-local${PYTHONPATH:+:$PYTHONPATH}"
-
           echo "=== FINAL ADB CHECK ==="
           adb devices -l
           adb shell am start -a android.settings.SETTINGS
           sleep 2
-
           echo "=== ARTEMIS ==="
           uv run artemis run \
             "Open Settings and report the battery percentage" \
