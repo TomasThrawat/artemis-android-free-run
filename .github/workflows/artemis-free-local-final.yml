@@ -20,6 +20,9 @@ jobs:
       OPENAI_BASE_URL: http://127.0.0.1:11434/v1
       ARTEMIS_LOCAL_ONLY: "1"
       ARTEMIS_LOCAL_MODEL: qwen3-vl:2b-instruct
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: init.defaultBranch
+      GIT_CONFIG_VALUE_0: main
       OLLAMA_LLM_LIBRARY: cpu
       OLLAMA_NO_CLOUD: "1"
 
@@ -150,17 +153,26 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+          grep -F '"max_turns": 3' config/artemis.jsonc
           uv run python - <<'PY'
           from artemis.config import initialize_llm_config
 
           cfg = initialize_llm_config()
-          assert cfg.default.provider.value == "openai"
-          assert cfg.default.model == "qwen3-vl:2b-instruct"
-          assert cfg.default.fallback is not None
-          assert cfg.default.fallback.provider.value == "openai"
-          assert cfg.default.fallback.model == "qwen3-vl:2b-instruct"
-          assert cfg.flash.max_turns == 3
+          planner = cfg.get_agent("planner")
+          operator = cfg.get_agent("operator")
+
+          assert planner.provider.value == "openai"
+          assert planner.model == "qwen3-vl:2b-instruct"
+          assert planner.fallback is not None
+          assert planner.fallback.provider.value == "openai"
+          assert planner.fallback.model == "qwen3-vl:2b-instruct"
+
+          assert operator.provider.value == "openai"
+          assert operator.model == "qwen3-vl:2b-instruct"
+
           print("ARTEMIS_CONFIG_VALID")
+          print("PLANNER", planner.provider.value, planner.model)
+          print("OPERATOR", operator.provider.value, operator.model)
           PY
 
       - name: Start local Qwen3-VL
