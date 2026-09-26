@@ -20,7 +20,6 @@ jobs:
       OPENAI_BASE_URL: http://127.0.0.1:11434/v1
       ARTEMIS_LOCAL_ONLY: "1"
       ARTEMIS_LOCAL_MODEL: qwen3-vl:2b-instruct
-      OLLAMA_MODELS: ${{ runner.temp }}/ollama-models
       OLLAMA_LLM_LIBRARY: cpu
       OLLAMA_NO_CLOUD: "1"
 
@@ -168,6 +167,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+          export OLLAMA_MODELS="$RUNNER_TEMP/ollama-models"
+          echo "OLLAMA_MODELS=$OLLAMA_MODELS" >> "$GITHUB_ENV"
           command -v ollama > /dev/null 2>&1 || curl -fsSL https://ollama.com/install.sh | sh
           sudo systemctl disable --now ollama || true
           mkdir -p "$OLLAMA_MODELS"
