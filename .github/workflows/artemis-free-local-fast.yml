@@ -14,6 +14,9 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     env:
+      ANDROID_SDK_ROOT: /home/runner/work/_temp/android-sdk
+      ANDROID_HOME: /home/runner/work/_temp/android-sdk
+      ANDROID_AVD_HOME: /home/runner/work/_temp/android-avd
       OLLAMA_HOST: 127.0.0.1:11434
       OLLAMA_MODELS: /home/runner/.ollama/models
       OPENAI_API_KEY: ollama
@@ -38,12 +41,13 @@ jobs:
             /home/runner/work/_temp/android-sdk/system-images/android-34/google_apis/x86_64
             /home/runner/.cache/uv
             /home/runner/.ollama/models
-          key: artemis-usersdk-qwen3vl-v2
+          key: artemis-usersdk-qwen3vl-v3
 
       - name: Prepare host
         shell: bash
         run: |
           set -euxo pipefail
+
           test -e /dev/kvm
           sudo chmod 666 /dev/kvm
 
@@ -58,28 +62,15 @@ jobs:
 
           mkdir -p "$HOME/.android"
           touch "$HOME/.android/emu-update-last-check.ini"
-
-          export ANDROID_SDK_ROOT="$RUNNER_TEMP/android-sdk"
-          export ANDROID_HOME="$ANDROID_SDK_ROOT"
-          export ANDROID_AVD_HOME="$RUNNER_TEMP/android-avd"
-
           mkdir -p "$ANDROID_SDK_ROOT" "$ANDROID_AVD_HOME"
 
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
-          echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
-
-          echo "$ANDROID_HOME/emulator" >> "$GITHUB_PATH"
-          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          echo "$ANDROID_SDK_ROOT/emulator" >> "$GITHUB_PATH"
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
       - name: Boot Android Emulator
         shell: bash
         run: |
           set -euxo pipefail
-
-          export ANDROID_SDK_ROOT="$RUNNER_TEMP/android-sdk"
-          export ANDROID_HOME="$ANDROID_SDK_ROOT"
-          export ANDROID_AVD_HOME="$RUNNER_TEMP/android-avd"
 
           SDKMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
           AVDMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/avdmanager
@@ -104,8 +95,7 @@ jobs:
           rm -rf "$ANDROID_AVD_HOME/artemis.avd"
           mkdir -p "$ANDROID_AVD_HOME"
 
-          printf '
-' | timeout 60 "$AVDMANAGER" --sdk_root="$ANDROID_SDK_ROOT" create avd             --force             --name artemis             --package "system-images;android-34;google_apis;x86_64"             --abi x86_64             --path "$ANDROID_AVD_HOME/artemis.avd"
+          echo no | timeout 60 "$AVDMANAGER" --sdk_root="$ANDROID_SDK_ROOT" create avd             --force             --name artemis             --package "system-images;android-34;google_apis;x86_64"             --abi x86_64             --path "$ANDROID_AVD_HOME/artemis.avd"
 
           test -f "$ANDROID_AVD_HOME/artemis.avd/config.ini"
 
@@ -117,11 +107,13 @@ jobs:
           timeout 240 "$ADB" wait-for-device
 
           for i in $(seq 1 150); do
-            [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '')" = "1" ] && break
+            value="$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+            [ "$value" = "1" ] && break
             sleep 2
           done
 
-          test "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '')" = "1"
+          value="$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+          test "$value" = "1"
 
           "$ADB" shell settings put global window_animation_scale 0
           "$ADB" shell settings put global transition_animation_scale 0
@@ -262,7 +254,7 @@ jobs:
             /home/runner/work/_temp/android-sdk/system-images/android-34/google_apis/x86_64
             /home/runner/.cache/uv
             /home/runner/.ollama/models
-          key: artemis-usersdk-qwen3vl-v2
+          key: artemis-usersdk-qwen3vl-v3
 
       - name: Diagnostics
         if: always()
