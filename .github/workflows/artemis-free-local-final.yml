@@ -38,7 +38,7 @@ jobs:
           sudo chmod 666 /dev/kvm
           if ! dpkg -s libpulse0 libx11-xcb1 >/dev/null 2>&1; then
             timeout 120 sudo apt-get update -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20
-            timeout 120 sudo apt-get install -y -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 libpulse0 libx11-xcb1
+            timeout 120 sudo apt-get install -y -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 libpulse0 libx11-xcb1 libx11-xcb-dev
           fi
           sudo ldconfig
           sudo ln -sf libX11-xcb.so.1 /usr/lib/x86_64-linux-gnu/libX11-xcb.so
@@ -47,7 +47,8 @@ jobs:
           export ANDROID_EMULATOR_HOME="$ANDROID_USER_HOME"
           export ANDROID_AVD_HOME="$RUNNER_TEMP/android-avd"
           mkdir -p "$ANDROID_SDK_HOME" "$ANDROID_USER_HOME" "$ANDROID_AVD_HOME"
-          rm -f "$HOME/.android/emu-update-last-check.ini"
+          mkdir -p "$HOME/.android"
+          touch "$HOME/.android/emu-update-last-check.ini"
           echo "ANDROID_SDK_HOME=$ANDROID_SDK_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_USER_HOME=$ANDROID_USER_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_EMULATOR_HOME=$ANDROID_EMULATOR_HOME" >> "$GITHUB_ENV"
@@ -72,6 +73,10 @@ jobs:
           sdkmanager --version
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
           sdkmanager "emulator" "platform-tools" "platforms;android-34" "system-images;android-34;google_apis;x86_64"
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/adbkey" ]; then
+            adb keygen "$HOME/.android/adbkey"
+          fi
           emulator -accel-check
           if [ ! -f "$ANDROID_AVD_HOME/artemis.avd/config.ini" ]; then
             echo no | avdmanager create avd --force --name artemis --package "system-images;android-34;google_apis;x86_64" --abi x86_64 --device pixel_2 --path "$ANDROID_AVD_HOME/artemis.avd"
