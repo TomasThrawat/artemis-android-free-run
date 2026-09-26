@@ -1,7 +1,6 @@
-name: Artemis Free Local Final
+name: Artemis Free Local Final v4
 
-on:
-  workflow_dispatch:
+on: [workflow_dispatch]
 
 permissions:
   contents: read
@@ -37,7 +36,7 @@ jobs:
             /usr/local/lib/android/sdk/system-images/android-34/google_apis/x86_64
             /home/runner/.cache/uv
             /home/runner/.ollama/models
-          key: artemis-free-android34-qwen3vl-v6
+          key: artemis-free-android34-qwen3vl-v7
           restore-keys: |
             artemis-free-android34-qwen3vl-
 
@@ -182,7 +181,7 @@ jobs:
             /usr/local/lib/android/sdk/system-images/android-34/google_apis/x86_64
             /home/runner/.cache/uv
             /home/runner/.ollama/models
-          key: artemis-free-android34-qwen3vl-v6
+          key: artemis-free-android34-qwen3vl-v7
 
       - name: Diagnostics
         if: always()
