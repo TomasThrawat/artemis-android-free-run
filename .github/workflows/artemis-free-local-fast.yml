@@ -39,11 +39,12 @@ jobs:
             /home/runner/work/_temp/android-sdk/emulator
             /home/runner/work/_temp/android-sdk/platform-tools
             /home/runner/work/_temp/android-sdk/platforms/android-34
-            /home/runner/work/_temp/android-sdk/system-images/android-34/google_apis/x86_64
+            /home/runner/work/_temp/android-sdk/system-images/android-34/google_apis
             /home/runner/.cache/uv
             /home/runner/.ollama/models
-          key: artemis-usersdk-qwen3vl-v4
+          key: artemis-usersdk-qwen3vl-v5
           restore-keys: |
+            artemis-usersdk-qwen3vl-v4
             artemis-usersdk-qwen3vl-v3
             artemis-usersdk-qwen3vl-
 
@@ -79,6 +80,7 @@ jobs:
           AVDMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/avdmanager
           ADB="$ANDROID_SDK_ROOT/platform-tools/adb"
           EMULATOR="$ANDROID_SDK_ROOT/emulator/emulator"
+          BASE_SDK=/usr/local/lib/android/sdk
 
           "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --version
           yes 2>/dev/null | "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null 2>&1 || true
@@ -89,23 +91,52 @@ jobs:
           [ -d "$ANDROID_SDK_ROOT/platforms/android-34" ] || missing=1
           [ -d "$ANDROID_SDK_ROOT/system-images/android-34/google_apis/x86_64" ] || missing=1
 
-          if [ "$missing" -eq 1 ]; then
-            "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT"               "emulator"               "platform-tools"               "platforms;android-34"               "system-images;android-34;google_apis;x86_64"
+          METADATA_DIR="$ANDROID_SDK_ROOT/system-images/android-34/google_apis"
+          METADATA_FILE="$METADATA_DIR/package.xml"
+
+          if [ ! -f "$METADATA_FILE" ] && [ -f "$BASE_SDK/system-images/android-34/google_apis/package.xml" ]; then
+            mkdir -p "$METADATA_DIR"
+            cp "$BASE_SDK/system-images/android-34/google_apis/package.xml" "$METADATA_FILE"
           fi
+
+          if [ ! -f "$METADATA_FILE" ]; then
+            missing=1
+          fi
+
+          if [ "$missing" -eq 1 ]; then
+            "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" \
+              "emulator" \
+              "platform-tools" \
+              "platforms;android-34" \
+              "system-images;android-34;google_apis;x86_64"
+          fi
+
+          test -x "$EMULATOR"
+          test -x "$ADB"
+          test -d "$ANDROID_SDK_ROOT/system-images/android-34/google_apis/x86_64"
+          test -f "$METADATA_FILE"
 
           "$EMULATOR" -accel-check
 
           rm -rf "$ANDROID_AVD_HOME/artemis.avd"
           mkdir -p "$ANDROID_AVD_HOME"
 
-          echo no | timeout 60 "$AVDMANAGER" create avd             --force             --name artemis             --package "system-images;android-34;google_apis;x86_64"             --abi x86_64             --path "$ANDROID_AVD_HOME/artemis.avd"
+          echo no | timeout 60 "$AVDMANAGER" create avd \
+            --force \
+            --name artemis \
+            --package "system-images;android-34;google_apis;x86_64" \
+            --abi x86_64 \
+            --path "$ANDROID_AVD_HOME/artemis.avd"
 
           test -f "$ANDROID_AVD_HOME/artemis.avd/config.ini"
 
           "$ADB" start-server
           "$ADB" devices -l
 
-          nohup "$EMULATOR" @artemis             -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data             -gpu swiftshader_indirect -accel on             > /tmp/emulator.log 2>&1 &
+          nohup "$EMULATOR" @artemis \
+            -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data \
+            -gpu swiftshader_indirect -accel on \
+            > /tmp/emulator.log 2>&1 &
 
           timeout 240 "$ADB" wait-for-device
 
@@ -146,7 +177,8 @@ jobs:
           sudo systemctl stop ollama >/dev/null 2>&1 || true
           mkdir -p "$OLLAMA_MODELS"
 
-          nohup env OLLAMA_HOST="$OLLAMA_HOST" OLLAMA_MODELS="$OLLAMA_MODELS" ollama serve             > /tmp/ollama.log 2>&1 &
+          nohup env OLLAMA_HOST="$OLLAMA_HOST" OLLAMA_MODELS="$OLLAMA_MODELS" ollama serve \
+            > /tmp/ollama.log 2>&1 &
 
           for i in $(seq 1 60); do
             curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1 && break
@@ -156,7 +188,10 @@ jobs:
           curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
           ollama pull qwen3-vl:2b-instruct
 
-          curl -fsS http://127.0.0.1:11434/v1/chat/completions             -H "Content-Type: application/json"             -d '{"model":"qwen3-vl:2b-instruct","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}'             | tee /tmp/qwen-smoke.json
+          curl -fsS http://127.0.0.1:11434/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -d '{"model":"qwen3-vl:2b-instruct","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}' \
+            | tee /tmp/qwen-smoke.json
 
       - name: Install local-only runtime patch
         shell: bash
@@ -244,7 +279,15 @@ jobs:
           adb shell am start -a android.settings.SETTINGS
           sleep 1
 
-          uv run artemis run             "Open Settings and report the battery percentage"             --profile flash             --without-video-recording-tools             --disable-step-summarizer             --disable-outputter             --disable-checker             --disable-planner-validation             --standalone
+          uv run artemis run \
+            "Open Settings and report the battery percentage" \
+            --profile flash \
+            --without-video-recording-tools \
+            --disable-step-summarizer \
+            --disable-outputter \
+            --disable-checker \
+            --disable-planner-validation \
+            --standalone
 
       - name: Save caches
         if: always() && steps.dependency-cache.outputs.cache-hit != 'true'
@@ -255,10 +298,10 @@ jobs:
             /home/runner/work/_temp/android-sdk/emulator
             /home/runner/work/_temp/android-sdk/platform-tools
             /home/runner/work/_temp/android-sdk/platforms/android-34
-            /home/runner/work/_temp/android-sdk/system-images/android-34/google_apis/x86_64
+            /home/runner/work/_temp/android-sdk/system-images/android-34/google_apis
             /home/runner/.cache/uv
             /home/runner/.ollama/models
-          key: artemis-usersdk-qwen3vl-v4
+          key: artemis-usersdk-qwen3vl-v5
 
       - name: Diagnostics
         if: always()
