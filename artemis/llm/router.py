@@ -209,6 +209,17 @@ class ModelFactory:
 
     @classmethod
     def create_model(cls, endpoint: ModelEndpoint) -> BaseChatModel:
+        if os.environ.get("ARTEMIS_LOCAL_ONLY") == "1":
+            provider = ModelProvider.from_string(endpoint.provider)
+            if provider in (ModelProvider.GOOGLE, ModelProvider.VERTEX_AI):
+                endpoint = endpoint.model_copy(update={
+                    "provider": ModelProvider.OLLAMA,
+                    "model_name": os.environ.get("ARTEMIS_LOCAL_MODEL", "qwen3-vl:2b-instruct"),
+                    "api_key": os.environ.get("OPENAI_API_KEY", "ollama"),
+                    "api_base": os.environ.get("OPENAI_BASE_URL", "http://127.0.0.1:11434/v1"),
+                    "enable_grounding": False,
+                })
+
         if os.environ.get("ARTEMIS_FAKE_LLM") == "1":
             from artemis.llm.fake_model import FakeChatModel
 
