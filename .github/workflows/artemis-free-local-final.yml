@@ -42,8 +42,6 @@ jobs:
         run: |
           set -euxo pipefail
 
-          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$HOME/.local/bin:$PATH"
-
           test -e /dev/kvm
           sudo chmod 666 /dev/kvm
           sudo apt-get update
@@ -56,11 +54,6 @@ jobs:
           echo "ANDROID_USER_HOME=$ANDROID_USER_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
 
-          if [ ! -f "$HOME/.android/adbkey" ]; then
-            adb keygen "$HOME/.android/adbkey" >/dev/null
-          fi
-          : > "$HOME/.android/emu-update-last-check.ini"
-
           echo "$ANDROID_HOME/emulator" >> "$GITHUB_PATH"
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
@@ -70,10 +63,22 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+
+          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$HOME/.local/bin:$PATH"
+
           sdkmanager --version
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager "emulator" "platform-tools" "platforms;android-34" "system-images;android-34;google_apis;x86_64"
+
+          command -v adb
+          command -v emulator
+          adb version
           emulator -accel-check
+
+          if [ ! -f "$HOME/.android/adbkey" ]; then
+            adb keygen "$HOME/.android/adbkey" >/dev/null
+          fi
+          : > "$HOME/.android/emu-update-last-check.ini"
 
           rm -rf "$ANDROID_AVD_HOME/artemis.avd"
           mkdir -p "$ANDROID_AVD_HOME"
@@ -281,6 +286,7 @@ jobs:
         shell: bash
         run: |
           set +e
+          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$HOME/.local/bin:$PATH"
           command -v adb >/dev/null 2>&1 && adb devices -l || true
           adb shell dumpsys battery || true
           test -f /tmp/emulator.log && tail -200 /tmp/emulator.log || true
