@@ -77,6 +77,30 @@ if os.environ.get("ARTEMIS_LOCAL_ONLY") == "1":
 
     service_llm.get_cached_raw_model = _get_cached_raw_model_local
 
+
+    # Use Ollama's native /api/chat path for local tool calling.
+    _original_factory_create_model = ModelFactory.create_model
+    def _create_model_local(cls, endpoint):
+        if endpoint.provider == ModelProvider.OLLAMA:
+            from langchain_ollama import ChatOllama
+            raw_base = (
+                endpoint.api_base
+                or os.environ.get('OLLAMA_BASE_URL')
+                or os.environ.get('OLLAMA_HOST')
+                or 'http://127.0.0.1:11434'
+            )
+            if not raw_base.startswith(('http://', 'https://')):
+                raw_base = 'http://' + raw_base
+            base_url = raw_base.rstrip('/')
+            if base_url.endswith('/v1'):
+                base_url = base_url[:-3].rstrip('/')
+            return ChatOllama(
+                model=endpoint.model_name,
+                base_url=base_url,
+                temperature=endpoint.temperature,
+            )
+        return _original_factory_create_model(endpoint)
+    ModelFactory.create_model = classmethod(_create_model_local)
     # Force structured tool selection for local OpenAI-compatible Qwen endpoints.
     from langchain_core.language_models.chat_models import BaseChatModel
     from artemis.agents.flash.runner import FlashRunner
