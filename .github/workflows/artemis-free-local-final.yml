@@ -104,6 +104,7 @@ jobs:
           set -euxo pipefail
           uv run python - <<'PY'
           from pathlib import Path
+          import re
 
           p = Path("config/artemis.jsonc")
           s = p.read_text(encoding="utf-8")
@@ -319,4 +320,6 @@ jobs:
           adb shell dumpsys battery || true
           tail -200 /tmp/emulator.log || true
           journalctl -u ollama --no-pager -n 160 || true
-          tail -200 /tmp/ollama.log || true
+          if [ -f /tmp/ollama.log ]; then
+            tail -200 /tmp/ollama.log
+          fi
