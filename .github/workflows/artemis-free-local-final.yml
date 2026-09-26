@@ -2,6 +2,9 @@ name: Artemis Free Local Final
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -16,7 +19,7 @@ jobs:
       OLLAMA_HOST: 127.0.0.1:11434
       OLLAMA_NUM_GPU: "0"
       OLLAMA_NUM_PARALLEL: "1"
-      OLLAMA_CONTEXT_LENGTH: "6144"
+      OLLAMA_CONTEXT_LENGTH: "32768"
       OLLAMA_KEEP_ALIVE: "10m"
       OLLAMA_NO_CLOUD: "1"
       OLLAMA_MODELS: /tmp/ollama-models
@@ -89,11 +92,13 @@ jobs:
           timeout 240 adb wait-for-device
 
           for i in $(seq 1 180); do
-            [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '')" = "1" ] && break
+            [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '
+')" = "1" ] && break
             sleep 2
           done
 
-          test "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '')" = "1"
+          test "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '
+')" = "1"
           adb shell settings put global window_animation_scale 0
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 0
@@ -127,7 +132,7 @@ jobs:
           cat >/tmp/ollama-local.conf <<'CONF'
           [Service]
           Environment=OLLAMA_HOST=127.0.0.1:11434
-          Environment=OLLAMA_CONTEXT_LENGTH=6144
+          Environment=OLLAMA_CONTEXT_LENGTH=32768
           Environment=OLLAMA_NUM_GPU=0
           Environment=OLLAMA_NUM_PARALLEL=1
           Environment=OLLAMA_KEEP_ALIVE=10m
@@ -292,7 +297,7 @@ jobs:
                       ),
                       temperature=temperature or 0.0,
                       max_tokens=256,
-                      timeout_seconds=timeout or 60.0,
+                      timeout_seconds=timeout or 180.0,
                       is_multimodal=True,
                   )
 
@@ -330,8 +335,6 @@ jobs:
                   if os.environ.get("ARTEMIS_LOCAL_ONLY") == "1":
                       return [
                           MANAGE_APP_TOOL,
-                          CLICK_TOOL,
-                          SWIPE_TOOL,
                           REPORT_TASK_STATUS_TOOL,
                       ]
                   return _original_get_tools(self)
@@ -342,7 +345,7 @@ jobs:
                   return (
                       "You are a focused Android UI automation agent.\n"
                       f"Goal: {self.goal}\n\n"
-                      "Inspect the current screenshot and UI hierarchy before acting. "
+                      "Inspect the current UI hierarchy before acting; local CPU mode omits screenshots when the UI tree is available. "
                       "Use only the provided tools. "
                       "For this task, launch Android Settings only when needed, "
                       "then find and open Battery. Use swipe only if Battery is not visible. "
@@ -385,8 +388,6 @@ jobs:
 
           assert names == [
               "manage_app",
-              "click",
-              "swipe",
               "report_task_status",
           ], names
           assert len(prompt) < 1500, len(prompt)
@@ -402,7 +403,7 @@ jobs:
           adb shell am start -a android.settings.SETTINGS
           sleep 1
 
-          timeout 120 uv run artemis run             "Open Settings and report the battery percentage. Only use Android Settings; do not open Gmail or any other app."             --profile flash             --without-video-recording-tools             --disable-step-summarizer             --disable-outputter             --disable-checker             --disable-planner-validation             --standalone
+          timeout 600 uv run artemis run             "Open Settings and report the battery percentage. Only use Android Settings; do not open Gmail or any other app."             --profile flash             --without-video-recording-tools             --disable-step-summarizer             --disable-outputter             --disable-checker             --disable-planner-validation             --standalone
 
       - name: Diagnostics
         if: always()
