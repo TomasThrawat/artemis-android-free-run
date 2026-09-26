@@ -116,13 +116,11 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          uv run python -c 'from artemis.config import initialize_llm_config; c=initialize_llm_config(); print("LOCAL_PLANNER_PROVIDER", c.planner.provider); print("LOCAL_PLANNER_MODEL", c.planner.model)'
-          uv run python -c 'from artemis.llm.router import ModelEndpoint, ModelFactory, ModelProvider; m=ModelFactory.create_model(ModelEndpoint(provider=ModelProvider.GOOGLE, model_name="gemini-2.5-flash")); print("LOCAL_FACTORY_TYPE", type(m).__name__); print("LOCAL_FACTORY_MODEL", getattr(m, "model_name", None)); print("LOCAL_FACTORY_BASE_URL", getattr(m, "openai_api_base", None) or getattr(m, "base_url", None))'
+          uv run python -c 'from artemis.config import initialize_llm_config; c=initialize_llm_config(); print("LOCAL_CONFIG_VALID", type(c).__name__)'
+          uv run python -c 'from artemis.llm.router import ModelEndpoint, ModelFactory, ModelProvider; m=ModelFactory.create_model(ModelEndpoint(provider=ModelProvider.GOOGLE, model_name="gemini-2.5-flash")); assert type(m).__name__ == "ChatOpenAI"; assert (getattr(m, "openai_api_base", None) or getattr(m, "base_url", None)) == "http://127.0.0.1:11434/v1"; print("LOCAL_ROUTING_OK", getattr(m, "model_name", None))'
 
       - name: Run Artemis local-only
         shell: bash
-        env:
-          PYTHONPATH: ${{ github.workspace }}/.artemis-local
         run: |
           set -euxo pipefail
 
