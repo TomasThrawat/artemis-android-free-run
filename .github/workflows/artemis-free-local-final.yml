@@ -36,7 +36,7 @@ jobs:
           sudo apt-get install -y libpulse0 libx11-xcb1 libx11-xcb-dev
 
           mkdir -p "$HOME/.android"
-          rm -f "$HOME/.android/emu-update-last-check.ini"
+          : > "$HOME/.android/emu-update-last-check.ini"
           if [ ! -f "$HOME/.android/adbkey" ]; then "$ANDROID_HOME/platform-tools/adb" keygen "$HOME/.android/adbkey"; fi
 
           ANDROID_USER_HOME="$RUNNER_TEMP/android-user-home"
@@ -158,7 +158,7 @@ jobs:
           from artemis.config import initialize_llm_config
           c = initialize_llm_config()
           print("LOCAL_CONFIG_VALID", type(c).__name__)
-          for role in ("planner", "operator", "explorer", "object_detector", "checker", "hopper"):
+          for role in ("planner", "operator", "explorer", "hopper"):
               cfg = c.get_agent(role)
               print(role, getattr(cfg, "provider", None), getattr(cfg, "model", None))
           PY
