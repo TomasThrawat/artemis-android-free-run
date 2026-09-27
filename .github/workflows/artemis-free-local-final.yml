@@ -40,9 +40,11 @@ jobs:
           if [ ! -f "$HOME/.android/adbkey" ]; then "$ANDROID_HOME/platform-tools/adb" keygen "$HOME/.android/adbkey"; fi
 
           ANDROID_USER_HOME="$RUNNER_TEMP/android-user-home"
+          ANDROID_SDK_HOME="$RUNNER_TEMP/android-user-home"
           ANDROID_AVD_HOME="$RUNNER_TEMP/android-avd"
           mkdir -p "$ANDROID_USER_HOME" "$ANDROID_AVD_HOME"
           echo "ANDROID_USER_HOME=$ANDROID_USER_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_HOME=$ANDROID_SDK_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
 
           echo "${ANDROID_HOME}/emulator" >> "${GITHUB_PATH}"
@@ -62,7 +64,12 @@ jobs:
           rm -rf "${ANDROID_AVD_HOME}/artemis.avd"
           mkdir -p "${ANDROID_AVD_HOME}"
 
-          echo "no" | avdmanager create avd             -n artemis             -k "system-images;android-34;google_apis;x86_64"
+          printf '\n' | timeout 60 avdmanager create avd \
+            --force \
+            --name artemis \
+            --package "system-images;android-34;google_apis;x86_64" \
+            --abi "x86_64" \
+            --path "${ANDROID_AVD_HOME}/artemis.avd"
 
           test -f "${ANDROID_AVD_HOME}/artemis.avd/config.ini"
           emulator -list-avds | grep -Fx "artemis"
@@ -112,12 +119,54 @@ jobs:
 
           curl -fsS http://127.0.0.1:11434/v1/chat/completions             -H "Content-Type: application/json"             -d '{"model":"qwen3-vl:2b-instruct","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}'             | tee /tmp/qwen-smoke.json
 
-      - name: Verify local-only routing
+      - name: Verify local-only routing and guardrails
         shell: bash
         run: |
           set -euxo pipefail
-          uv run python -c 'from artemis.config import initialize_llm_config; c=initialize_llm_config(); print("LOCAL_CONFIG_VALID", type(c).__name__)'
-          uv run python -c 'from artemis.llm.router import ModelEndpoint, ModelFactory, ModelProvider; m=ModelFactory.create_model(ModelEndpoint(provider=ModelProvider.GOOGLE, model_name="gemini-2.5-flash")); assert type(m).__name__ == "ChatOpenAI"; assert (getattr(m, "openai_api_base", None) or getattr(m, "base_url", None)) == "http://127.0.0.1:11434/v1"; print("LOCAL_ROUTING_OK", getattr(m, "model_name", None))'
+
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          path = Path("config/artemis.jsonc")
+          text = path.read_text(encoding="utf-8")
+          text, count = re.subn(r'("max_turns"\s*:\s*)0', r'\g<1>6', text, count=1)
+          if count != 1:
+              raise SystemExit("Expected one flash max_turns value of 0")
+          path.write_text(text, encoding="utf-8")
+          print("LOCAL_FLASH_MAX_TURNS=6")
+          PY
+
+          uv run python - <<'PY'
+          from langchain_openai import ChatOpenAI
+          from langchain_core.tools import tool
+
+          @tool
+          def tap(x: int, y: int) -> str:
+              """Preflight-only Android tap action."""
+              return f"tap({x},{y})"
+
+          llm = ChatOpenAI(
+              model="qwen3-vl:2b-instruct",
+              temperature=0.0,
+              max_tokens=128,
+              api_key="ollama",
+              base_url="http://127.0.0.1:11434/v1",
+              timeout=60.0,
+          ).bind_tools([tap], tool_choice="required")
+          response = llm.invoke("Call the tap tool once with x=1 and y=2. Do not answer with prose.")
+          if not response.tool_calls:
+              raise SystemExit(f"Qwen tool-calling preflight failed: {response.content!r}")
+          print("LOCAL_TOOL_CALL_OK", response.tool_calls[0]["name"], response.tool_calls[0]["args"])
+          PY
+
+          uv run python - <<'PY'
+          from artemis.config import initialize_llm_config
+          c = initialize_llm_config()
+          print("LOCAL_CONFIG_VALID", type(c).__name__)
+          for role in ("planner", "operator", "explorer", "object_detector", "checker", "hopper"):
+              cfg = c.get_agent(role)
+              print(role, getattr(cfg, "provider", None), getattr(cfg, "model", None))
+          PY
 
       - name: Run Artemis local-only
         shell: bash
@@ -140,4 +189,4 @@ jobs:
           adb devices -l
           adb shell dumpsys battery
           tail -200 /tmp/emulator.log
-          journalctl -u ollama --no-pager -n 160
+          journalctl -u ollama --no-pager -n 160 || true
