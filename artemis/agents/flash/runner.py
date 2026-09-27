@@ -916,8 +916,15 @@ class FlashRunner:
 
     async def _invoke_model(self, llm, current_tools: list, messages: list[BaseMessage]):
         """Binds the active tools and invokes the model through the LLM gateway."""
-        # Bind active tools
-        bound_llm = llm.bind_tools(current_tools)
+        # Bind active tools. Local Qwen runs must emit an action instead of
+        # repeatedly returning observation-only text; keep production behavior unchanged.
+        if os.getenv("ARTEMIS_LOCAL_ONLY") == "1":
+            try:
+                bound_llm = llm.bind_tools(current_tools, tool_choice="required")
+            except TypeError:
+                bound_llm = llm.bind_tools(current_tools)
+        else:
+            bound_llm = llm.bind_tools(current_tools)
 
         # Invoke Model. Streaming, live-token UI deltas, classified
         # retries, and pause/resume are all owned by the LLM gateway
