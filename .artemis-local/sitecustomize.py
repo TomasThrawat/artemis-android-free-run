@@ -4,9 +4,18 @@ Enabled only when ARTEMIS_LOCAL_ONLY=1. Normal Artemis provider behavior is
 unchanged when the flag is absent.
 """
 
+import importlib.util
 import os
+import sys
 
-if os.environ.get("ARTEMIS_LOCAL_ONLY") == "1":
+_workspace = os.environ.get("GITHUB_WORKSPACE")
+if _workspace and _workspace not in sys.path:
+    sys.path.insert(0, _workspace)
+
+if (
+    os.environ.get("ARTEMIS_LOCAL_ONLY") == "1"
+    and importlib.util.find_spec("artemis") is not None
+):
     from artemis.llm.router import ModelEndpoint, ModelFactory, ModelProvider
     import artemis.config.llm as config_llm
     import artemis.services.llm as service_llm
@@ -114,11 +123,26 @@ if os.environ.get("ARTEMIS_LOCAL_ONLY") == "1":
         return _original_bind_tools(self, tools, *args, **kwargs)
     BaseChatModel.bind_tools = _bind_tools_local
 
+    from artemis.sdk.agent import ArtemisAgent
+
+    async def _prewarm_local(self, api_key=None):
+        return None
+
+    ArtemisAgent._prewarm_llm_connections = _prewarm_local
+
     _original_init = FlashRunner.__init__
     def _flash_init_local(self, ctx, goal, max_turns=None):
         if max_turns is None or max_turns <= 0:
             max_turns = 6
-        return _original_init(self, ctx, goal, max_turns)
+        _original_init(self, ctx, goal, max_turns)
+        summary_service = getattr(self, "summarizer", None)
+        if summary_service is not None:
+            self.step_summarizer_cfg = self.step_summarizer_cfg.model_copy(
+                update={"enabled": False}
+            )
+            self.summarizer = None
+            if getattr(ctx, "step_memory", None) is summary_service:
+                ctx.step_memory = None
     FlashRunner.__init__ = _flash_init_local
 
     _original_resolve = FlashRunner._resolve_tool_calls
