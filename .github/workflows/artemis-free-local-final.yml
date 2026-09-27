@@ -18,6 +18,7 @@ jobs:
       OPENAI_BASE_URL: http://127.0.0.1:11434/v1
       ARTEMIS_LOCAL_ONLY: "1"
       ARTEMIS_LOCAL_MODEL: qwen3-vl:2b-instruct
+      ARTEMIS_KEEP_DEVICE_AWAKE: "false"
       GIT_CONFIG_COUNT: "1"
       GIT_CONFIG_KEY_0: init.defaultBranch
       GIT_CONFIG_VALUE_0: main
@@ -168,8 +169,23 @@ jobs:
                   f"Local config rewrite matched nothing: providers={providers}, models={models}"
               )
 
+          summary_match = re.search(
+              r'("step_summarizer"\s*:\s*\{[^}]*?"enabled"\s*:\s*)true',
+              text,
+              flags=re.DOTALL,
+          )
+          if summary_match:
+              replacement = re.sub(
+                  r'("enabled"\s*:\s*)true',
+                  r'\1false',
+                  summary_match.group(0),
+                  count=1,
+              )
+              text = text[:summary_match.start()] + replacement + text[summary_match.end():]
+
           path.write_text(text, encoding="utf-8")
           print(f"LOCAL_CONFIG_REWRITTEN providers={providers} models={models}")
+          print("LOCAL_STEP_SUMMARIZER=false")
           PY
 
           if grep -nE '"provider"[[:space:]]*:[[:space:]]*"(google|openai|anthropic|openrouter|xai|vertexai)"' config/artemis.jsonc; then
@@ -189,11 +205,26 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/.artemis-local"
 
           cat > "$GITHUB_WORKSPACE/.artemis-local/sitecustomize.py" <<'PY'
+          import importlib.util
           import os
+          import sys
 
-          if os.environ.get("ARTEMIS_LOCAL_ONLY") == "1":
+          workspace = os.environ.get("GITHUB_WORKSPACE")
+          if workspace and workspace not in sys.path:
+              sys.path.insert(0, workspace)
+
+          if (
+              os.environ.get("ARTEMIS_LOCAL_ONLY") == "1"
+              and importlib.util.find_spec("artemis") is not None
+          ):
               import artemis.services.llm as llm_service
               from artemis.llm.router import ModelEndpoint, ModelFactory, ModelProvider
+              from artemis.sdk.agent import ArtemisAgent
+
+              async def _prewarm_local(self, api_key=None):
+                  return None
+
+              ArtemisAgent._prewarm_llm_connections = _prewarm_local
 
               def _local_google_llm(
                   model_name="gemini-3.8-flash",
@@ -296,7 +327,18 @@ jobs:
           sleep 2
 
           echo "=== ARTEMIS ==="
-          uv run artemis run             "Open Settings and report the battery percentage"             --profile flash             --without-video-recording-tools             --disable-step-summarizer             --disable-outputter             --disable-checker             --disable-planner-validation             --standalone
+          set +e
+          uv run artemis run             "Open Settings and report the battery percentage"             --profile flash             --without-video-recording-tools             --disable-step-summarizer             --disable-outputter             --disable-checker             --disable-planner-validation             --standalone 2>&1 | tee /tmp/artemis-run.log
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -eq 0
+
+          if grep -nE             "FlashRunner failed:|Session ended: .*status: failed|VisualStepSummarizer: Error|Skipping LLM pre-warming: No API key available|Could not inspect the shared screen-bright wake lock|USB stay-awake is not active"             /tmp/artemis-run.log; then
+            echo "Local Artemis clean-run guard detected an execution warning/error"
+            exit 1
+          fi
+
+          grep -q "Session ended: .*status: completed" /tmp/artemis-run.log
 
       - name: Diagnostics
         if: always()
