@@ -98,6 +98,24 @@ jobs:
           uv pip install --python .venv/bin/python langchain-ollama
           uv run python --version
 
+      - name: Start local Qwen3-VL
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if ! command -v ollama >/dev/null 2>&1; then
+            curl -fsSL https://ollama.com/install.sh | sh
+          fi
+
+          for i in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1 && break
+            sleep 2
+          done
+
+          curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
+          ollama pull qwen3-vl:2b-instruct
+
+          curl -fsS http://127.0.0.1:11434/v1/chat/completions             -H "Content-Type: application/json"             -d '{"model":"qwen3-vl:2b-instruct","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}'             | tee /tmp/qwen-smoke.json
+
       - name: Verify local native Qwen tool-calling
         shell: bash
         run: |
@@ -124,24 +142,6 @@ jobs:
           print('LOCAL_NATIVE_TOOL_CALL_OK', response.tool_calls[0]['name'], response.tool_calls[0]['args'])
           PY
 
-      - name: Start local Qwen3-VL
-        shell: bash
-        run: |
-          set -euxo pipefail
-          if ! command -v ollama >/dev/null 2>&1; then
-            curl -fsSL https://ollama.com/install.sh | sh
-          fi
-
-          for i in $(seq 1 60); do
-            curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1 && break
-            sleep 2
-          done
-
-          curl -fsS http://127.0.0.1:11434/api/tags >/dev/null
-          ollama pull qwen3-vl:2b-instruct
-
-          curl -fsS http://127.0.0.1:11434/v1/chat/completions             -H "Content-Type: application/json"             -d '{"model":"qwen3-vl:2b-instruct","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}'             | tee /tmp/qwen-smoke.json
-
       - name: Verify local-only routing and guardrails
         shell: bash
         run: |
@@ -152,7 +152,7 @@ jobs:
           import re
           path = Path("config/artemis.jsonc")
           text = path.read_text(encoding="utf-8")
-          text, count = re.subn(r'("max_turns"\s*:\s*)0', r'\g<1>6', text, count=1)
+          text, count = re.subn(r'("max_turns"\s*:\s*)0', r'\g<1>3', text, count=1)
           if count != 1:
               raise SystemExit("Expected one flash max_turns value of 0")
           path.write_text(text, encoding="utf-8")
