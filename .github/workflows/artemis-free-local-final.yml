@@ -13,8 +13,6 @@ jobs:
     env:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       ANDROID_HOME: /usr/local/lib/android/sdk
-      ANDROID_AVD_HOME: ${{ runner.temp }}/android-avd
-      ANDROID_USER_HOME: ${{ runner.temp }}/android-user-home
       OLLAMA_HOST: 127.0.0.1:11434
       OPENAI_API_KEY: ollama
       OPENAI_BASE_URL: http://127.0.0.1:11434/v1
@@ -34,20 +32,22 @@ jobs:
           set -euxo pipefail
           test -e /dev/kvm
           sudo chmod 666 /dev/kvm
-
           sudo apt-get update
           sudo apt-get install -y libpulse0 libx11-xcb1 libx11-xcb-dev
+
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          export ANDROID_USER_HOME="$HOME/.android"
+          echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_USER_HOME=$ANDROID_USER_HOME" >> "$GITHUB_ENV"
 
           mkdir -p "$ANDROID_AVD_HOME" "$ANDROID_USER_HOME"
           mkdir -p "$ANDROID_USER_HOME/.android"
 
-          # Avoid emulator config/key warnings on fresh runners.
           touch "$ANDROID_USER_HOME/.android/emu-update-last-check.ini"
           if [ ! -f "$ANDROID_USER_HOME/.android/adbkey" ]; then
             "$ANDROID_HOME/platform-tools/adb" keygen "$ANDROID_USER_HOME/.android/adbkey"
           fi
 
-          # The emulator sometimes looks for the unversioned X11-XCB name.
           X11_XCB="$(
             ldconfig -p 2>/dev/null |
             awk '/libX11-xcb.so.1/{print $NF; exit}'
@@ -68,7 +68,6 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-
           sdkmanager --version
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
@@ -121,7 +120,6 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-
           if ! command -v ollama >/dev/null 2>&1; then
             curl -fsSL https://ollama.com/install.sh | sh
           fi
@@ -142,7 +140,7 @@ jobs:
 
           curl -fsS http://127.0.0.1:11434/v1/chat/completions             -H "Content-Type: application/json"             -d '{"model":"qwen3-vl:2b-instruct","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}'             | tee /tmp/qwen-smoke.json
 
-      - name: Configure Artemis LLMs for local Ollama
+      - name: Configure Artemis for local Ollama
         shell: bash
         run: |
           set -euxo pipefail
@@ -154,40 +152,80 @@ jobs:
           path = Path("config/artemis.jsonc")
           text = path.read_text(encoding="utf-8")
 
-          text, provider_count = re.subn(
+          text, providers = re.subn(
               r'("provider"\s*:\s*)"[^"]+"',
               r'\1"ollama"',
               text,
           )
-          text, model_count = re.subn(
+          text, models = re.subn(
               r'("model"\s*:\s*)"[^"]+"',
               r'\1"qwen3-vl:2b-instruct"',
               text,
           )
 
-          if provider_count == 0 or model_count == 0:
+          if not providers or not models:
               raise SystemExit(
-                  f"Local config patch matched nothing: providers={provider_count}, models={model_count}"
+                  f"Local config rewrite matched nothing: providers={providers}, models={models}"
               )
 
           path.write_text(text, encoding="utf-8")
-          print(
-              f"LOCAL_LLM_CONFIG_PATCH providers={provider_count} models={model_count}"
-          )
+          print(f"LOCAL_CONFIG_REWRITTEN providers={providers} models={models}")
           PY
 
           if grep -nE '"provider"[[:space:]]*:[[:space:]]*"(google|openai|anthropic|openrouter|xai|vertexai)"' config/artemis.jsonc; then
-            echo "Non-local provider remained in Artemis config"
+            echo "Non-local provider remains"
             exit 1
           fi
 
           if grep -nE '"model"[[:space:]]*:[[:space:]]*"gemini-' config/artemis.jsonc; then
-            echo "Gemini model remained in Artemis config"
+            echo "Gemini model remains"
             exit 1
           fi
 
+      - name: Install local-only runtime guard
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/.artemis-local"
+
+          cat > "$GITHUB_WORKSPACE/.artemis-local/sitecustomize.py" <<'PY'
+          import os
+
+          if os.environ.get("ARTEMIS_LOCAL_ONLY") == "1":
+              import artemis.services.llm as llm_service
+              from artemis.llm.router import ModelEndpoint, ModelFactory, ModelProvider
+
+              def _local_google_llm(
+                  model_name="gemini-3.8-flash",
+                  temperature=None,
+                  timeout=None,
+                  thinking_budget=None,
+                  thinking_level="medium",
+                  include_thoughts=None,
+                  enable_grounding=False,
+              ):
+                  endpoint = ModelEndpoint(
+                      provider=ModelProvider.OLLAMA,
+                      model_name=os.environ.get(
+                          "ARTEMIS_LOCAL_MODEL",
+                          "qwen3-vl:2b-instruct",
+                      ),
+                      temperature=temperature or 0.0,
+                      timeout_seconds=timeout or 60.0,
+                      thinking_budget=None,
+                      thinking_level=None,
+                      include_thoughts=include_thoughts,
+                      enable_grounding=False,
+                  )
+                  return ModelFactory.create_model(endpoint)
+
+              llm_service.get_google_llm = _local_google_llm
+          PY
+
       - name: Verify local Artemis routing
         shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}/.artemis-local
         run: |
           set -euxo pipefail
 
@@ -196,7 +234,7 @@ jobs:
           from artemis.config import initialize_llm_config
           from artemis.services.llm import get_llm
 
-          assert os.environ.get("ARTEMIS_LOCAL_ONLY") == "1"
+          assert os.environ["ARTEMIS_LOCAL_ONLY"] == "1"
 
           config = initialize_llm_config()
 
@@ -206,19 +244,20 @@ jobs:
               model = getattr(cfg, "model", None)
               print(f"{role}: provider={provider} model={model}")
               if provider != "ollama":
-                  raise SystemExit(f"{role} did not resolve to ollama")
+                  raise SystemExit(f"{role} resolved to {provider!r}, not ollama")
 
-          class Ctx:
+          class Context:
               llm_config = config
 
-          model = get_llm(Ctx(), "planner")
-          print("LOCAL_PLANNER_MODEL_TYPE", type(model).__name__)
+          planner = get_llm(Context(), "planner")
+          print("LOCAL_PLANNER_TYPE", type(planner).__name__)
           PY
 
       - name: Verify local Qwen tool calling
         shell: bash
         run: |
           set -euxo pipefail
+
           uv run python - <<'PY'
           from langchain_ollama import ChatOllama
           from langchain_core.tools import tool
@@ -251,7 +290,7 @@ jobs:
         run: |
           set -euxo pipefail
 
-          echo "=== FINAL ADB CHECK ==="
+          echo "=== ADB ==="
           adb devices -l
           adb shell am start -a android.settings.SETTINGS
           sleep 2
