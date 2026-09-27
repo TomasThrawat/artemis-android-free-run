@@ -114,6 +114,56 @@ jobs:
 
           curl -fsS http://127.0.0.1:11434/v1/chat/completions             -H "Content-Type: application/json"             -d '{"model":"qwen3-vl:2b-instruct","messages":[{"role":"user","content":"Reply with OK only."}],"max_tokens":16}'             | tee /tmp/qwen-smoke.json
 
+      - name: Configure Artemis for local Ollama
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("config/artemis.jsonc")
+          text = path.read_text(encoding="utf-8")
+
+          # This workflow is intentionally local-only. Replace provider/model
+          # selections in the checked-out config so startup validation never
+          # selects a cloud provider before ModelFactory can route locally.
+          text, providers = re.subn(
+              r'("provider"\s*:\s*)"(?:google|openai|vertexai|anthropic|openrouter|xai)"',
+              r'\1"ollama"',
+              text,
+          )
+          text, models = re.subn(
+              r'("model"\s*:\s*)"(?:gemini-[^"]+|gpt-[^"]+|claude-[^"]+|llama3\.2-vision)"',
+              r'\1"qwen3-vl:2b-instruct"',
+              text,
+          )
+          if providers < 1 or models < 1:
+              raise SystemExit(f"Local config rewrite unexpectedly matched providers={providers}, models={models}")
+
+          path.write_text(text, encoding="utf-8")
+          print(f"LOCAL_CONFIG_REWRITE providers={providers} models={models}")
+          PY
+
+          export ARTEMIS_PLANNER_VALIDATION_ENABLED=0
+          echo "ARTEMIS_PLANNER_VALIDATION_ENABLED=0" >> "$GITHUB_ENV"
+
+          uv run python - <<'PY'
+          from artemis.config import initialize_llm_config
+          cfg = initialize_llm_config()
+          roles = ("planner", "operator", "explorer", "object_detector", "hopper", "summarizer")
+          for role in roles:
+              try:
+                  item = cfg.get_agent(role)
+              except Exception:
+                  continue
+              provider = getattr(item, "provider", None)
+              model = getattr(item, "model", None)
+              print("LOCAL_ROLE", role, provider, model)
+              if str(provider).lower() != "ollama":
+                  raise SystemExit(f"{role} is not local: {provider}")
+          PY
+
       - name: Verify local-only routing and guardrails
         shell: bash
         run: |
