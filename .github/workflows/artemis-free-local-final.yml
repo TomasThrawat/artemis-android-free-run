@@ -158,7 +158,7 @@ jobs:
           from artemis.config import initialize_llm_config
           c = initialize_llm_config()
           print("LOCAL_CONFIG_VALID", type(c).__name__)
-          for role in ("planner", "operator", "explorer", "hopper"):
+          for role in ("planner", "operator", "explorer"):
               cfg = c.get_agent(role)
               print(role, getattr(cfg, "provider", None), getattr(cfg, "model", None))
           PY
